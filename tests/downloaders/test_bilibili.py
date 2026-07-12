@@ -11,11 +11,13 @@ from forge_video_summarizer.errors import DownloadError
 
 
 class FakeResp:
-    def __init__(self, payload=None, *, content=b"", status=200):
+    def __init__(self, payload=None, *, content=b"", status=200, headers=None):
         self._payload = payload
         self._content = content
         self.status_code = status
         self.headers = {"Content-Length": str(len(content))}
+        if headers:
+            self.headers.update(headers)
 
     def json(self):
         if self._payload is None:
@@ -183,11 +185,43 @@ def test_stream_download_error(tmp_path):
     session.get.side_effect = [
         FakeResp(VIEW_PAYLOAD),
         FakeResp(PLAYURL_PAYLOAD),
-        _rq.RequestException("net"),
-    ]
+    ] + [_rq.RequestException("net")] * 10  # exhaust retries
     dl = BilibiliDownloader(session=session)
-    with pytest.raises(DownloadError, match="stream download failed"):
+    with pytest.raises(DownloadError, match="stream download failed after retries"):
         dl.download("https://www.bilibili.com/video/BV1", tmp_path)
+
+
+def test_stream_download_resumes_after_drop(tmp_path):
+    """First GET delivers a partial body, retry (Range) delivers the rest."""
+    from requests.exceptions import ChunkedEncodingError
+
+    dl = BilibiliDownloader()
+    out = tmp_path / "stream.m4s"
+    calls = []
+
+    def fake_get(url, headers=None, stream=True, timeout=60):
+        calls.append(headers or {})
+        if len(calls) == 1:
+            # Announce total=10 via Content-Length, but the body raises mid-read.
+            r = FakeResp(content=b"", headers={"Content-Length": "10"})
+
+            def broken_iter(chunk_size=1):
+                yield b"AAAAA"  # 5 of 10 bytes
+                raise ChunkedEncodingError("dropped")
+
+            r.iter_content = broken_iter
+            return r
+        # Resume: Range header present; deliver remaining 5 bytes.
+        assert headers and headers["Range"] == "bytes=5-"
+        return FakeResp(content=b"BBBBB", headers={"Content-Range": "bytes 5-9/10"})
+
+    dl._session = MagicMock()
+    dl._session.get.side_effect = fake_get
+    dl._download_stream(
+        "https://cdn/stream", out
+    )
+    assert out.read_bytes() == b"AAAAABBBBB"
+    assert len(calls) == 2  # dropped once, resumed once
 
 
 def test_merge_ffmpeg_error(tmp_path):

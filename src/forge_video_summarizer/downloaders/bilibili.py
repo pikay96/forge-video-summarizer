@@ -120,16 +120,48 @@ class BilibiliDownloader(Downloader):
             raise DownloadError("playurl returned no DASH streams")
         return dash["video"][0]["baseUrl"], dash["audio"][0]["baseUrl"]
 
-    def _download_stream(self, url: str, out_path: Path) -> None:
-        try:
-            with self._session.get(url, stream=True, timeout=30) as r:
-                r.raise_for_status()
-                with open(out_path, "wb") as f:
-                    for chunk in r.iter_content(chunk_size=1 << 20):
-                        if chunk:
-                            f.write(chunk)
-        except requests.RequestException as exc:
-            raise DownloadError(f"stream download failed: {exc}") from exc
+    def _download_stream(self, url: str, out_path: Path, *, max_retries: int = 5) -> None:
+        """Download a stream to out_path, resuming with HTTP Range on drops.
+
+        Bilibili's CDN frequently drops long single-shot connections mid-transfer
+        (IncompleteRead). We append via Range: bytes=<have>- and retry until the
+        full Content-Length (from the first response) is on disk.
+        """
+        done = out_path.stat().st_size if out_path.exists() else 0
+        total: int | None = None
+        attempt = 0
+        while True:
+            headers = {"Range": f"bytes={done}-"} if done else {}
+            try:
+                with self._session.get(url, headers=headers, stream=True, timeout=60) as r:
+                    r.raise_for_status()
+                    if total is None:
+                        cr = r.headers.get("Content-Range")
+                        if cr and "/" in cr:
+                            total = int(cr.rsplit("/", 1)[1])
+                        elif r.headers.get("Content-Length"):
+                            total = int(r.headers["Content-Length"]) + done
+                    mode = "ab" if done else "wb"
+                    with open(out_path, mode) as f:
+                        for chunk in r.iter_content(chunk_size=1 << 20):
+                            if chunk:
+                                f.write(chunk)
+                                done += len(chunk)
+            except requests.RequestException as exc:
+                attempt += 1
+                if attempt > max_retries:
+                    raise DownloadError(f"stream download failed after retries: {exc}") from exc
+                done = out_path.stat().st_size if out_path.exists() else 0
+                continue
+
+            if total is None or done >= total:
+                return
+            # Connection closed early but no exception raised; resume.
+            attempt += 1
+            if attempt > max_retries:
+                raise DownloadError(
+                    f"stream download incomplete: {done}/{total} bytes after retries"
+                )
 
     @staticmethod
     def _merge(video_path: Path, audio_path: Path, out_path: Path) -> None:
