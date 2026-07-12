@@ -9,7 +9,7 @@ video URL / local file
    ▼
 audio.wav (16 kHz mono)  │  ffmpeg
    │
-   ▼  transcribe model  (Azure Speech fast transcription — real timestamps, multi-locale)
+   ▼  transcribe model  (Azure Speech fast transcription, MAI enhanced — best zh/en text)
 transcript.json + transcript.txt (segment timestamps)
    │
    ▼  LLM summarize      (Azure OpenAI Responses API)
@@ -35,7 +35,7 @@ Copy `.env.example` to `.env` and set:
 
 - `BILI_SESSDATA` — SESSDATA cookie from a logged-in bilibili session (only auth needed).
 - `AZURE_SPEECH_ENDPOINT` / `AZURE_SPEECH_KEY` — Azure Speech (fast transcription).
-  `AZURE_SPEECH_LANGUAGES` (optional) sets candidate locales for language ID.
+  `AZURE_SPEECH_MODEL` (optional) sets the enhanced model, default `mai-transcribe-1.5`.
 - `AZURE_OPENAI_ENDPOINT` / `AZURE_OPENAI_API_KEY` / `AZURE_OPENAI_DEPLOYMENT` — summarization.
 
 ## Usage
@@ -66,10 +66,11 @@ Flags: `--output <dir>` (default `output/`), `--force` (ignore cache), `--env <p
 2. **Extract audio** — `ffmpeg` → 16 kHz mono PCM WAV (exactly what the Speech SDK
    consumes, so Stage 3 needs no re-transcode). No normalization/trimming (keeps the
    timeline identical so anchors stay accurate).
-3. **Transcribe** — Azure Speech **fast transcription** (REST, synchronous). Real
-   per-segment timestamps (genuine phrase offsets, not interpolated) and multi-locale
-   language ID (`locales`, default zh-CN + en-US). NOT enhancedMode/MAI (which collapses
-   output to one phrase). ~34s for a 27-min video. Original language preserved.
+3. **Transcribe** — Azure Speech **fast transcription** with **enhancedMode (MAI)** for
+   best mixed zh/en text quality (recovers inline English terms + punctuation). ~9s for
+   a 27-min video. MAI returns one block, so per-segment `[MM:SS]` anchors are
+   interpolated (approximate — transcript.txt says so); transcript.json keeps the raw
+   response as source of truth.
 4. **Summarize** — Azure OpenAI Responses API. Teacher-clear + interview-ready markdown,
    length scales with duration, one `[MM:SS]` anchor per meaningful topic shift.
 

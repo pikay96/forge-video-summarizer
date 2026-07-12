@@ -14,7 +14,7 @@ def test_load_config_reads_file(tmp_path, monkeypatch):
     cfg = load_config(p)
     assert cfg.speech_key == "k"
     assert cfg.speech_endpoint == "https://s/"
-    assert cfg.speech_languages == "zh-CN,en-US"  # default
+    assert cfg.speech_model == "mai-transcribe-1.5"  # default
 
 
 def test_process_env_overrides_file(tmp_path, monkeypatch):

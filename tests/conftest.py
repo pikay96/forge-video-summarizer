@@ -13,7 +13,7 @@ def config() -> Config:
         bili_sessdata="sess",
         speech_endpoint="https://speech.example.com/",
         speech_key="speech-key",
-        speech_languages="zh-CN,en-US",
+        speech_model="mai-transcribe-1.5",
         openai_endpoint="https://oai.example.com/openai/v1",
         openai_key="oai-key",
         openai_deployment="gpt-5.6-sol",

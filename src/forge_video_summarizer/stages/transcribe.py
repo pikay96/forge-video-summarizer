@@ -1,21 +1,26 @@
-"""Stage 3 — Transcription via Azure Speech *fast transcription* (REST, synchronous).
+"""Stage 3 — Transcription via Azure Speech fast transcription, enhancedMode (MAI).
 
 POST {endpoint}/speechtotext/transcriptions:transcribe (multipart: audio + a
-`definition` JSON). Plain fast transcription (NO enhancedMode) returns multiple
-phrases each with a REAL offset + duration, and supports multi-locale language ID
-via `locales`. That gives us accurate per-segment timestamps AND keeps the original
-language — in a single fast call (~34s for a 27-min video).
+`definition` JSON). enhancedMode with the MAI model (verbatim) gives the best text
+quality — it recovers inline English/technical terms (e.g. "trade off", "LLM", "RAG")
+and adds proper sentence punctuation, clearly better than plain fast transcription on
+mixed zh/en content.
 
-NOTE: enhancedMode/MAI is intentionally NOT used — it collapses the whole audio into
-one phrase (no usable per-segment timing) and rejects multi-locale `locales`.
+The tradeoff: MAI returns the whole audio as ONE phrase (offset 0, total duration),
+so there are no real per-segment timestamps. We derive `[MM:SS]` anchors by splitting
+that phrase into sentences and interpolating each start proportionally by character
+offset across the total duration. These anchors are APPROXIMATE (assume ~constant
+speech rate) but monotonic and close enough for topic navigation — transcript.txt
+carries a header saying so, and transcript.json keeps the raw response as truth.
 
-transcript.json stores the raw Azure response (real offsets — source of truth);
-parse_response maps it into a Transcript.
+enhancedMode rejects multi-locale `locales` ("requires at most one locale") and
+auto-detects the language, so we send no `locales` field.
 """
 
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import requests
@@ -26,45 +31,85 @@ from ..models import Transcript, TranscriptSegment
 
 __all__ = ["transcribe_audio", "parse_response", "MAX_AUDIO_BYTES", "MAX_AUDIO_SECONDS"]
 
-_API_VERSION = "2024-11-15"
+_API_VERSION = "2025-10-15"
 # Azure Speech fast transcription limits (verified from MS Learn).
 MAX_AUDIO_BYTES = 300 * 1024 * 1024  # < 300 MB per request
 MAX_AUDIO_SECONDS = 2 * 60 * 60  # < 2 hours
 
 
 def _build_definition(config: Config) -> dict:
-    """Fast transcription request definition: candidate locales for language ID.
-    No enhancedMode (which would collapse output to one phrase and reject multiple
-    locales). Empty/blank config falls back to zh-CN + en-US candidates.
+    """enhancedMode (MAI, verbatim). No `locales` — enhancedMode auto-detects the
+    language and rejects a multi-locale list. phraseList present-but-empty (wired for
+    per-run domain terms).
     """
-    locales = [x.strip() for x in config.speech_languages.split(",") if x.strip()]
-    return {"locales": locales or ["zh-CN", "en-US"]}
+    return {
+        "phraseList": {"phrases": []},
+        "enhancedMode": {
+            "enabled": True,
+            "model": config.speech_model,
+            "transcribeStyle": "verbatim",
+        },
+    }
+
+
+def _split_sentences(text: str) -> list[str]:
+    """Split text into sentences on CJK + ASCII end punctuation, keeping the mark."""
+    parts = re.split(r"(?<=[。！？；.!?;])\s*", text.strip())
+    return [p for p in (s.strip() for s in parts) if p]
 
 
 def parse_response(payload: dict) -> Transcript:
-    """Map an Azure fast-transcription JSON response into a Transcript.
+    """Map an Azure fast-transcription response into a Transcript.
 
-    Plain fast transcription returns a `phrases` array, each with a real
-    `offsetMilliseconds` / `durationMilliseconds` and a detected `locale`. We use
-    those directly — no interpolation, timestamps are exact.
+    MAI enhancedMode returns a single phrase for the whole audio. We split it into
+    sentences and interpolate per-sentence start times proportionally by character
+    offset across the total duration -> APPROXIMATE but monotonic anchors. If a
+    response ever has multiple phrases (non-enhanced), we use their real offsets.
     """
     phrases = payload.get("phrases") or []
     locale = phrases[0].get("locale", "") if phrases else ""
 
-    segments: list[TranscriptSegment] = []
-    for ph in phrases:
-        text = (ph.get("text") or "").strip()
-        if text:
-            segments.append(
-                TranscriptSegment(
-                    start=float(ph.get("offsetMilliseconds", 0)) / 1000.0,
-                    duration=float(ph.get("durationMilliseconds", 0)) / 1000.0,
-                    text=text,
-                )
-            )
-
     combined = payload.get("combinedPhrases") or []
     full_text = (combined[0].get("text") or "").strip() if combined else ""
+
+    segments: list[TranscriptSegment] = []
+    approximate = False
+    if len(phrases) > 1:
+        for ph in phrases:
+            text = (ph.get("text") or "").strip()
+            if text:
+                segments.append(
+                    TranscriptSegment(
+                        start=float(ph.get("offsetMilliseconds", 0)) / 1000.0,
+                        duration=float(ph.get("durationMilliseconds", 0)) / 1000.0,
+                        text=text,
+                    )
+                )
+    elif phrases:
+        ph = phrases[0]
+        base = float(ph.get("offsetMilliseconds", 0)) / 1000.0
+        total_ms = float(
+            ph.get("durationMilliseconds") or payload.get("durationMilliseconds") or 0
+        )
+        total_s = total_ms / 1000.0
+        text = (ph.get("text") or "").strip()
+        full_text = full_text or text
+        sentences = _split_sentences(text)
+        if len(sentences) > 1 and total_s > 0:
+            approximate = True  # interpolated, not measured
+            total_chars = sum(len(s) for s in sentences)
+            cursor = 0
+            for i, sent in enumerate(sentences):
+                start = base + total_s * (cursor / total_chars)
+                cursor += len(sent)
+                nxt = base + total_s * (cursor / total_chars)
+                end = nxt if i < len(sentences) - 1 else base + total_s
+                segments.append(
+                    TranscriptSegment(start=start, duration=max(0.0, end - start), text=sent)
+                )
+        elif text:
+            segments.append(TranscriptSegment(start=base, duration=total_s, text=text))
+
     if not full_text:
         full_text = "".join(s.text for s in segments)
 
@@ -72,7 +117,7 @@ def parse_response(payload: dict) -> Transcript:
         segments=segments,
         locale=locale,
         full_text=full_text,
-        approximate_timestamps=False,  # real per-phrase offsets
+        approximate_timestamps=approximate,
         raw=payload,
     )
 
@@ -99,8 +144,8 @@ def transcribe_audio(
     duration: float | None = None,
     session: requests.Session | None = None,
 ) -> Transcript:
-    """Transcribe an audio file via fast transcription, returning a Transcript with
-    REAL per-segment timestamps. Raises on limits/errors.
+    """Transcribe an audio file via MAI enhancedMode, returning a Transcript.
+    Timestamps are interpolated (approximate). Raises on limits/errors.
     """
     config.require_speech()
     audio_path = Path(audio_path)

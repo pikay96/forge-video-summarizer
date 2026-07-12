@@ -19,7 +19,7 @@ class Config:
     bili_sessdata: str = ""
     speech_endpoint: str = ""
     speech_key: str = ""
-    speech_languages: str = "zh-CN,en-US"
+    speech_model: str = "mai-transcribe-1.5"
     openai_endpoint: str = ""
     openai_key: str = ""
     openai_deployment: str = "gpt-5.6-sol"
@@ -48,7 +48,7 @@ def load_config(env_path: str | os.PathLike | None = ".env") -> Config:
         bili_sessdata=env("BILI_SESSDATA", ""),
         speech_endpoint=env("AZURE_SPEECH_ENDPOINT", ""),
         speech_key=env("AZURE_SPEECH_KEY", ""),
-        speech_languages=env("AZURE_SPEECH_LANGUAGES", "zh-CN,en-US"),
+        speech_model=env("AZURE_SPEECH_MODEL", "mai-transcribe-1.5"),
         openai_endpoint=env("AZURE_OPENAI_ENDPOINT", ""),
         openai_key=env("AZURE_OPENAI_API_KEY", ""),
         openai_deployment=env("AZURE_OPENAI_DEPLOYMENT", "gpt-5.6-sol"),
