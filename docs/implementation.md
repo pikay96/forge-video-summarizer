@@ -15,9 +15,12 @@ Given a video URL, download the video file and write a rich metadata sidecar int
 per-video working directory named after the (sanitized) video title.
 
 ### Source support (v1)
-- **v1 supports bilibili.com only.**
-- Download logic is **hand-written per site** (NOT `yt-dlp`). A reference project will
-  be folded in.
+- **v1 supports bilibili.com URLs, and local video files.**
+  - A **local video file path** as input skips the download stage entirely and enters
+    the pipeline at Stage 2 (audio extraction). No metadata sidecar is fetched for
+    local files (only what ffprobe can read).
+- Remote download logic is **hand-written per site** (NOT `yt-dlp`). A reference
+  project will be folded in.
 - **Layered / pluggable design** — a downloader abstraction (base interface +
   per-site implementation) so bilibili is implementation #1 and other sites (YouTube,
   etc.) slot in behind the same interface without touching the pipeline.
@@ -77,3 +80,22 @@ the rest is free provenance. Target fields (grab what's available):
   (API endpoints, signing, stream selection).
 - Multi-part bilibili videos: decide whether v1 downloads a single part or all parts
   (defer until reference project is reviewed).
+
+---
+
+## Transcription API limits (verified)
+
+**Transcriber = Azure Speech Services *fast transcription*** (`speechtotext/
+transcriptions:transcribe`, e.g. `mai-transcribe-1.5`) — NOT Azure OpenAI Whisper.
+
+Verified limits (Microsoft Learn, "Quotas and limits for Azure Speech", Standard S0,
+retrieved 2026-07-12):
+- **Maximum audio input file size: < 500 MB**
+- **Maximum audio length: < 5 hours per file**
+- Maximum requests per minute: 600
+
+Implication for chunking (Stage 3): the 25 MB figure was the *OpenAI Whisper* limit
+and does NOT apply here. With a 500 MB / 5-hour ceiling, most videos fit in a single
+request — chunking is only needed for very long content (multi-hour). The chunking +
+timestamp-offset machinery still gets built (for the >5h / >500MB tail and safety
+margin), but it will rarely trigger. Threshold to be set in the Stage 3 spec.
