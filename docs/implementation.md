@@ -133,14 +133,11 @@ else. Four steps:
    (Reference does single-stream GET; the full app uses ranged parallel chunks — a
    speed optimization, optional for v1.)
 
-**Optimization to consider (audio-only path):** DASH exposes the **audio stream
-separately**. For a summarizer we only need audio — Stage 1 could download just
-`dash["audio"][0]` and hand it to Stage 3, **skipping video download AND Stage 2's
-ffmpeg extraction** entirely. Trade-off: the bilibili audio stream is typically AAC
-(m4s) at bilibili's sample rate, so we'd likely still run a light ffmpeg transcode to
-16 kHz mono MP3 for consistency (and to keep the local-file path identical). Decide in
-implementation: (a) keep video+extract uniform across sources, or (b) audio-only
-fast-path for bilibili. Either way the video timeline is preserved (no trimming).
+**Always download the full video (not audio-only).** Even though DASH exposes the
+audio stream separately and a summarizer only needs audio today, v1 **always downloads
+and keeps the video file**: visual capability (frame analysis / OCR / scene understanding)
+is planned, and it needs the real video. Stage 2 extracts audio from the downloaded
+video as normal — no audio-only fast-path.
 
 **BV-id extraction:** accept a raw `BVxxxx` id or a full URL; regex `(BV[0-9A-Za-z]+)`.
 
