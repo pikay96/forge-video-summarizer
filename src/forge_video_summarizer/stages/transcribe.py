@@ -1,8 +1,11 @@
 """Stage 3 — Transcription via Azure Speech Services fast transcription.
 
 POST {endpoint}/speechtotext/transcriptions:transcribe (multipart audio + a
-`definition` JSON). Enhanced mode (verbatim), empty-but-wired phrase list,
-automatic language identification. Transcript stays in the original language.
+`definition` JSON). Enhanced mode (MAI, verbatim), single locale. Transcript stays
+in the original language.
+
+MAI-transcribe returns the whole audio as ONE phrase, so per-segment timestamps are
+derived by sentence-splitting + proportional interpolation (see parse_response).
 
 v1 does NOT chunk: if the audio exceeds the fast-transcription limits
 (500 MB / 5 h) we raise AudioTooLongError rather than truncate. The chunk +
@@ -12,6 +15,7 @@ per-chunk-offset + stitch design is the documented future extension point.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import requests
@@ -27,14 +31,15 @@ _API_VERSION = "2025-10-15"
 MAX_AUDIO_BYTES = 500 * 1024 * 1024  # < 500 MB
 MAX_AUDIO_SECONDS = 5 * 60 * 60  # < 5 hours
 
-# Candidate locales for language identification (mixed EN/CN content).
-_DEFAULT_LOCALES = ["zh-CN", "en-US"]
 
-
-def _build_definition(config: Config, locales: list[str]) -> dict:
+def _build_definition(config: Config) -> dict:
+    """Match the reference request: no `locales` (MAI auto-detects the language),
+    phraseList present-but-empty (wired for per-run domain terms), enhanced MAI mode.
+    Sending `locales` with enhanced mode is rejected ("requires at most one locale"),
+    so we omit it and let MAI identify the language automatically.
+    """
     return {
-        "locales": locales,
-        "phraseList": {"phrases": []},  # empty but wired for per-run domain terms
+        "phraseList": {"phrases": []},
         "enhancedMode": {
             "enabled": True,
             "model": config.speech_model,
@@ -43,29 +48,67 @@ def _build_definition(config: Config, locales: list[str]) -> dict:
     }
 
 
+def _split_sentences(text: str) -> list[str]:
+    """Split text into sentences on CJK + ASCII end punctuation, keeping the mark."""
+    parts = re.split(r"(?<=[。！？；.!?;])\s*", text.strip())
+    return [p for p in (s.strip() for s in parts) if p]
+
+
 def parse_response(payload: dict) -> Transcript:
     """Map an Azure fast-transcription JSON response into a Transcript.
 
-    Uses phrase-level timestamps (offset + duration in milliseconds), which are
-    already referenced to the original audio timeline.
+    MAI-transcribe (enhanced mode) returns the whole audio as a SINGLE phrase, so
+    real per-phrase timestamps aren't available. To still provide ``[MM:SS]`` anchors,
+    we split that phrase into sentences and interpolate each sentence's start time
+    proportionally by character offset across the total duration. Timestamps are
+    therefore APPROXIMATE (speech rate ~constant) but monotonic and close enough for
+    topic anchors. When the API does return multiple phrases, we use them directly.
     """
     phrases = payload.get("phrases") or []
-    segments: list[TranscriptSegment] = []
-    for ph in phrases:
-        start = float(ph.get("offsetMilliseconds", 0)) / 1000.0
-        duration = float(ph.get("durationMilliseconds", 0)) / 1000.0
-        text = (ph.get("text") or "").strip()
-        if text:
-            segments.append(TranscriptSegment(start=start, duration=duration, text=text))
-
-    locale = ""
-    if phrases:
-        locale = phrases[0].get("locale", "") or ""
+    locale = phrases[0].get("locale", "") if phrases else ""
 
     combined = payload.get("combinedPhrases") or []
-    if combined:
-        full_text = (combined[0].get("text") or "").strip()
-    else:
+    full_text = (combined[0].get("text") or "").strip() if combined else ""
+
+    segments: list[TranscriptSegment] = []
+    if len(phrases) > 1:
+        # Genuine multi-phrase response: use real timestamps.
+        for ph in phrases:
+            text = (ph.get("text") or "").strip()
+            if text:
+                segments.append(
+                    TranscriptSegment(
+                        start=float(ph.get("offsetMilliseconds", 0)) / 1000.0,
+                        duration=float(ph.get("durationMilliseconds", 0)) / 1000.0,
+                        text=text,
+                    )
+                )
+    elif phrases:
+        # Single phrase (MAI): derive sentence segments with interpolated timestamps.
+        ph = phrases[0]
+        base = float(ph.get("offsetMilliseconds", 0)) / 1000.0
+        total_ms = float(
+            ph.get("durationMilliseconds") or payload.get("durationMilliseconds") or 0
+        )
+        total_s = total_ms / 1000.0
+        text = (ph.get("text") or "").strip()
+        full_text = full_text or text
+        sentences = _split_sentences(text)
+        if sentences and total_s > 0:
+            total_chars = sum(len(s) for s in sentences)
+            cursor = 0
+            for i, sent in enumerate(sentences):
+                start = base + total_s * (cursor / total_chars)
+                cursor += len(sent)
+                nxt = base + total_s * (cursor / total_chars)
+                end = nxt if i < len(sentences) - 1 else base + total_s
+                segments.append(
+                    TranscriptSegment(start=start, duration=max(0.0, end - start), text=sent)
+                )
+        elif text:
+            segments.append(TranscriptSegment(start=base, duration=total_s, text=text))
+
+    if not full_text:
         full_text = " ".join(s.text for s in segments)
 
     return Transcript(segments=segments, locale=locale, full_text=full_text)
@@ -90,7 +133,6 @@ def transcribe_audio(
     audio_path: str | Path,
     config: Config,
     *,
-    locales: list[str] | None = None,
     duration: float | None = None,
     session: requests.Session | None = None,
 ) -> Transcript:
@@ -104,7 +146,7 @@ def transcribe_audio(
 
     endpoint = config.speech_endpoint.rstrip("/")
     url = f"{endpoint}/speechtotext/transcriptions:transcribe?api-version={_API_VERSION}"
-    definition = _build_definition(config, locales or _DEFAULT_LOCALES)
+    definition = _build_definition(config)
 
     sess = session or requests.Session()
     try:

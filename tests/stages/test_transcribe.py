@@ -47,6 +47,43 @@ def test_parse_response_no_combined_falls_back():
     assert t.full_text == "a b"
 
 
+def test_parse_response_single_phrase_interpolates():
+    """MAI returns one phrase -> sentence split with interpolated timestamps."""
+    payload = {
+        "durationMilliseconds": 100000,  # 100 s
+        "combinedPhrases": [{"text": "First sentence. Second one. Third here."}],
+        "phrases": [
+            {
+                "offsetMilliseconds": 0,
+                "durationMilliseconds": 100000,
+                "text": "First sentence. Second one. Third here.",
+                "locale": "zh-CN",
+            }
+        ],
+    }
+    t = parse_response(payload)
+    assert len(t.segments) == 3
+    # Monotonic, start at 0, within total duration.
+    starts = [s.start for s in t.segments]
+    assert starts[0] == 0.0
+    assert starts == sorted(starts)
+    assert t.segments[-1].start < 100.0
+    assert t.locale == "zh-CN"
+    assert t.full_text == "First sentence. Second one. Third here."
+
+
+def test_parse_response_single_phrase_no_duration():
+    """Single phrase but no duration -> one fallback segment, no crash."""
+    payload = {"phrases": [{"offsetMilliseconds": 0, "text": "Only text no time."}]}
+    t = parse_response(payload)
+    assert len(t.segments) == 1
+    assert t.segments[0].text == "Only text no time."
+
+
+def test_parse_response_empty():
+    assert parse_response({}).segments == []
+
+
 def test_transcribe_missing_file(config, tmp_path):
     with pytest.raises(TranscriptionError, match="not found"):
         transcribe_audio(tmp_path / "nope.mp3", config)
@@ -93,7 +130,7 @@ def test_transcribe_http_error(config, tmp_path):
         transcribe_audio(audio, config, duration=1, session=session)
 
 
-def test_transcribe_definition_has_enhanced_and_empty_phraselist(config, tmp_path):
+def test_transcribe_definition_matches_reference(config, tmp_path):
     audio = tmp_path / "audio.mp3"
     audio.write_bytes(b"x")
     session = MagicMock()
@@ -111,4 +148,5 @@ def test_transcribe_definition_has_enhanced_and_empty_phraselist(config, tmp_pat
     assert definition["enhancedMode"]["enabled"] is True
     assert definition["enhancedMode"]["model"] == "mai-transcribe-1.5"
     assert definition["phraseList"]["phrases"] == []
-    assert definition["locales"] == ["zh-CN", "en-US"]
+    # No `locales` field — MAI auto-detects (sending it is rejected in enhanced mode).
+    assert "locales" not in definition
