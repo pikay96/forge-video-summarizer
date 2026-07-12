@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+
+# Env / secrets
+.env
+*.pat
+
+# Pipeline artifacts
+*.mp4
+*.mkv
+*.webm
+*.wav
+*.mp3
+*.srt
+transcript.txt
+summary.md
+output/
+downloads/
+models/
