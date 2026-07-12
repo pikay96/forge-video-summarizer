@@ -65,26 +65,45 @@ class TranscriptSegment:
 
 @dataclass
 class Transcript:
-    """A full transcript: ordered segments + detected locale + full text."""
+    """A full transcript: ordered segments + detected locale + full text.
+
+    ``segments`` timestamps may be INTERPOLATED (see the transcribe stage) when the
+    ASR model returns a single phrase. ``raw`` holds the untouched API response as the
+    real source of truth; it is not part of ``to_dict`` serialization.
+    """
 
     segments: list[TranscriptSegment] = field(default_factory=list)
     locale: str = ""
     full_text: str = ""
+    approximate_timestamps: bool = False
+    raw: dict[str, Any] | None = field(default=None, repr=False, compare=False)
 
     @property
     def duration(self) -> float:
         return max((s.end for s in self.segments), default=0.0)
 
     def to_timestamped_text(self) -> str:
-        """Human-readable transcript with an inline anchor per segment."""
-        return "\n".join(
+        """Human-readable transcript with an inline anchor per segment.
+
+        Prepends a header disclosing when anchors are approximate/interpolated.
+        """
+        body = "\n".join(
             f"{format_timestamp(s.start)} {s.text}".rstrip() for s in self.segments
         )
+        if self.approximate_timestamps:
+            header = (
+                "# NOTE: timestamps are APPROXIMATE — the transcription model returned a\n"
+                "# single block, so per-line [MM:SS] anchors are interpolated by sentence\n"
+                "# position across the total duration (only 0:00 and the end are exact).\n\n"
+            )
+            return header + body
+        return body
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "locale": self.locale,
             "full_text": self.full_text,
+            "approximate_timestamps": self.approximate_timestamps,
             "segments": [s.to_dict() for s in self.segments],
         }
 
@@ -94,4 +113,5 @@ class Transcript:
             segments=[TranscriptSegment(**s) for s in data.get("segments", [])],
             locale=data.get("locale", ""),
             full_text=data.get("full_text", ""),
+            approximate_timestamps=data.get("approximate_timestamps", False),
         )

@@ -94,13 +94,19 @@ def test_run_transcribe_cache_hit(config, tmp_path):
     pipe = Pipeline(config, output_root=tmp_path)
     ws = Workspace(tmp_path, "T", "BV1")
     ws.ensure()
-    t = Transcript(segments=[TranscriptSegment(0.0, 1.0, "hi")], locale="en-US")
-    ws.transcript_json_path.write_text(json.dumps(t.to_dict()))
+    # Cache holds the RAW Azure response shape (source of truth).
+    raw = {
+        "durationMilliseconds": 1000,
+        "combinedPhrases": [{"text": "hi"}],
+        "phrases": [{"offsetMilliseconds": 0, "durationMilliseconds": 1000, "text": "hi", "locale": "en-US"}],
+    }
+    ws.transcript_json_path.write_text(json.dumps(raw))
 
     with patch("forge_video_summarizer.pipeline.transcribe_audio") as tr:
         result = pipe.run_transcribe(ws, force=False)
     tr.assert_not_called()
     assert result.segments[0].text == "hi"
+    assert result.locale == "en-US"
 
 
 def test_run_transcribe_writes_artifacts(config, tmp_path):
@@ -120,6 +126,23 @@ def test_run_transcribe_writes_artifacts(config, tmp_path):
     assert result.segments[0].text == "hi"
 
 
+def test_run_transcribe_saves_raw_json(config, tmp_path):
+    """transcript.json must be the raw API response, not the parsed shape."""
+    pipe = Pipeline(config, output_root=tmp_path)
+    ws = Workspace(tmp_path, "T", "BV1")
+    ws.ensure()
+    ws.audio_path.write_bytes(b"audio")
+    raw = {"durationMilliseconds": 5000, "phrases": [{"offsetMilliseconds": 0, "text": "hi"}]}
+    t = Transcript(segments=[TranscriptSegment(0.0, 1.0, "hi")], raw=raw)
+
+    with patch("forge_video_summarizer.pipeline.probe_duration", return_value=5.0), \
+         patch("forge_video_summarizer.pipeline.transcribe_audio", return_value=t):
+        pipe.run_transcribe(ws)
+
+    saved = json.loads(ws.transcript_json_path.read_text())
+    assert saved == raw  # raw response, verbatim
+
+
 def test_run_summarize_cache_hit(config, tmp_path):
     pipe = Pipeline(config, output_root=tmp_path)
     ws = Workspace(tmp_path, "T", "BV1")
@@ -135,8 +158,12 @@ def test_run_summarize_writes(config, tmp_path):
     pipe = Pipeline(config, output_root=tmp_path)
     ws = Workspace(tmp_path, "T", "BV1")
     ws.ensure()
-    t = Transcript(segments=[TranscriptSegment(0.0, 1.0, "hi")], locale="en-US")
-    ws.transcript_json_path.write_text(json.dumps(t.to_dict()))
+    t_raw = {
+        "durationMilliseconds": 1000,
+        "combinedPhrases": [{"text": "hi"}],
+        "phrases": [{"offsetMilliseconds": 0, "durationMilliseconds": 1000, "text": "hi", "locale": "en-US"}],
+    }
+    ws.transcript_json_path.write_text(json.dumps(t_raw))
     ws.metadata_path.write_text(json.dumps(VideoMetadata(video_id="BV1", title="T").to_dict()))
 
     with patch("forge_video_summarizer.pipeline.summarize_transcript", return_value="# S") as sm:

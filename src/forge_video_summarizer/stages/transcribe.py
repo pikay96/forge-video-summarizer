@@ -71,6 +71,7 @@ def parse_response(payload: dict) -> Transcript:
     full_text = (combined[0].get("text") or "").strip() if combined else ""
 
     segments: list[TranscriptSegment] = []
+    approximate = False
     if len(phrases) > 1:
         # Genuine multi-phrase response: use real timestamps.
         for ph in phrases:
@@ -94,7 +95,8 @@ def parse_response(payload: dict) -> Transcript:
         text = (ph.get("text") or "").strip()
         full_text = full_text or text
         sentences = _split_sentences(text)
-        if sentences and total_s > 0:
+        if len(sentences) > 1 and total_s > 0:
+            approximate = True  # timestamps below are interpolated, not measured
             total_chars = sum(len(s) for s in sentences)
             cursor = 0
             for i, sent in enumerate(sentences):
@@ -111,7 +113,13 @@ def parse_response(payload: dict) -> Transcript:
     if not full_text:
         full_text = " ".join(s.text for s in segments)
 
-    return Transcript(segments=segments, locale=locale, full_text=full_text)
+    return Transcript(
+        segments=segments,
+        locale=locale,
+        full_text=full_text,
+        approximate_timestamps=approximate,
+        raw=payload,
+    )
 
 
 def _check_limits(audio_path: Path, duration: float | None) -> None:

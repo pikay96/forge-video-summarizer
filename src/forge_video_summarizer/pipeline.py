@@ -19,6 +19,7 @@ from .stages import (
     summarize_transcript,
     transcribe_audio,
 )
+from .stages.transcribe import parse_response
 from .workspace import Workspace
 
 __all__ = ["Pipeline"]
@@ -84,15 +85,21 @@ class Pipeline:
 
     # ── Stage 3 ─────────────────────────────────────────────────────────
     def run_transcribe(self, ws: Workspace, *, force: bool = False) -> Transcript:
+        # transcript.json holds the RAW API response (source of truth). Re-parse it
+        # on cache hits so the interpolated anchors are regenerated deterministically.
         if Workspace.should_skip(ws.transcript_json_path, force):
-            return Transcript.from_dict(json.loads(ws.transcript_json_path.read_text("utf-8")))
+            raw = json.loads(ws.transcript_json_path.read_text("utf-8"))
+            return parse_response(raw)
 
         duration = probe_duration(ws.audio_path)
         transcript = transcribe_audio(ws.audio_path, self.config, duration=duration)
 
+        # Raw response = honest source of truth (real offsets only: 0 + total).
         ws.transcript_json_path.write_text(
-            json.dumps(transcript.to_dict(), ensure_ascii=False, indent=2), "utf-8"
+            json.dumps(transcript.raw or transcript.to_dict(), ensure_ascii=False, indent=2),
+            "utf-8",
         )
+        # Human-readable anchors (interpolated, clearly labeled in the header).
         ws.transcript_txt_path.write_text(transcript.to_timestamped_text(), "utf-8")
         return transcript
 
@@ -101,7 +108,7 @@ class Pipeline:
         if Workspace.should_skip(ws.summary_path, force):
             return ws.summary_path
 
-        transcript = Transcript.from_dict(
+        transcript = parse_response(
             json.loads(ws.transcript_json_path.read_text("utf-8"))
         )
         metadata = self._read_metadata(ws)
