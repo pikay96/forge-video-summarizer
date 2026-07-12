@@ -11,6 +11,7 @@ __all__ = [
     "TranscriptionError",
     "AudioTooLongError",
     "SummarizationError",
+    "ExportError",
 ]
 
 
@@ -44,3 +45,7 @@ class AudioTooLongError(TranscriptionError):
 
 class SummarizationError(ForgeError):
     """Azure OpenAI summarization failed."""
+
+
+class ExportError(ForgeError):
+    """Notion export failed (auth, unreachable page, API error)."""

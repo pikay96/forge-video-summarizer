@@ -17,4 +17,6 @@ def config() -> Config:
         openai_endpoint="https://oai.example.com/openai/v1",
         openai_key="oai-key",
         openai_deployment="gpt-5.6-sol",
+        notion_key="notion-key",
+        notion_parent_page_id="39b0ddcb890880caadc4cf292e18f46e",
     )

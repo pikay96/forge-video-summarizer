@@ -1,0 +1,169 @@
+from __future__ import annotations
+
+from unittest.mock import MagicMock
+
+import pytest
+
+from forge_video_summarizer.config import normalize_page_id
+from forge_video_summarizer.errors import ConfigError, ExportError
+from forge_video_summarizer.models import VideoMetadata
+from forge_video_summarizer.stages.export_notion import (
+    NOTION_BLOCK_LIMIT,
+    export_summary,
+    linkify_timestamps,
+    markdown_to_blocks,
+)
+
+VIDEO_URL = "https://www.bilibili.com/video/BV1nU96BnE6P"
+
+
+# ── normalize_page_id ───────────────────────────────────────────────────────
+
+def test_normalize_from_url():
+    url = "https://app.notion.com/p/pikameow/Video-Summarizer-39b0ddcb890880caadc4cf292e18f46e"
+    assert normalize_page_id(url) == "39b0ddcb-8908-80ca-adc4-cf292e18f46e"
+
+
+def test_normalize_from_bare_hex():
+    assert normalize_page_id("39b0ddcb890880caadc4cf292e18f46e") == \
+        "39b0ddcb-8908-80ca-adc4-cf292e18f46e"
+
+
+def test_normalize_from_dashed_uuid():
+    u = "39b0ddcb-8908-80ca-adc4-cf292e18f46e"
+    assert normalize_page_id(u) == u
+
+
+def test_normalize_empty():
+    assert normalize_page_id("") == ""
+
+
+# ── linkify_timestamps ──────────────────────────────────────────────────────
+
+def test_linkify_makes_clickable_offset():
+    spans = linkify_timestamps("intro [01:45] then [1:02:03] end", VIDEO_URL)
+    urls = [s["text"]["link"]["url"] for s in spans if "link" in s["text"]]
+    assert f"{VIDEO_URL}?t=105" in urls  # 1:45 -> 105s
+    assert f"{VIDEO_URL}?t=3723" in urls  # 1:02:03 -> 3723s
+
+
+def test_linkify_appends_with_ampersand_when_query_present():
+    spans = linkify_timestamps("[00:30]", VIDEO_URL + "?p=2")
+    assert spans[0]["text"]["link"]["url"] == VIDEO_URL + "?p=2&t=30"
+
+
+def test_linkify_plain_when_no_url():
+    spans = linkify_timestamps("[00:30] hi", "")
+    assert all("link" not in s["text"] for s in spans)
+
+
+# ── markdown_to_blocks ──────────────────────────────────────────────────────
+
+def test_headings_levels():
+    blocks = markdown_to_blocks("# A\n## B\n### C\n#### D")
+    assert [b["type"] for b in blocks] == [
+        "heading_1", "heading_2", "heading_3", "heading_3",  # h4 clamps to h3
+    ]
+
+
+def test_lists_and_paragraph():
+    md = "- one\n- two\n1. first\n2. second\n\nplain text"
+    blocks = markdown_to_blocks(md)
+    types = [b["type"] for b in blocks]
+    assert types == [
+        "bulleted_list_item", "bulleted_list_item",
+        "numbered_list_item", "numbered_list_item",
+        "paragraph",
+    ]
+
+
+def test_code_fence():
+    md = "```python\nprint(1)\nprint(2)\n```"
+    blocks = markdown_to_blocks(md)
+    assert len(blocks) == 1
+    assert blocks[0]["type"] == "code"
+    assert blocks[0]["code"]["language"] == "python"
+    assert blocks[0]["code"]["rich_text"][0]["text"]["content"] == "print(1)\nprint(2)"
+
+
+def test_quote_and_inline_code():
+    blocks = markdown_to_blocks("> quoted `code` here")
+    assert blocks[0]["type"] == "quote"
+    spans = blocks[0]["quote"]["rich_text"]
+    assert any(s.get("annotations", {}).get("code") for s in spans)
+
+
+def test_heading_timestamp_becomes_link():
+    blocks = markdown_to_blocks("### [00:00] Intro", VIDEO_URL)
+    spans = blocks[0]["heading_3"]["rich_text"]
+    assert any(s["text"].get("link", {}).get("url") == f"{VIDEO_URL}?t=0" for s in spans)
+
+
+# ── export_summary (mocked notion-client) ───────────────────────────────────
+
+def _fake_client(existing_children=None):
+    client = MagicMock()
+    client.blocks.children.list.return_value = {
+        "results": existing_children or [], "has_more": False, "next_cursor": None,
+    }
+    client.pages.create.return_value = {"id": "newpage-id-0000"}
+    return client
+
+
+def _meta():
+    return VideoMetadata(
+        video_id="BV1nU96BnE6P", title="Agent Memory",
+        source_url=VIDEO_URL, duration=1655.0, uploader="某UP主",
+    )
+
+
+def test_export_requires_config(config):
+    config.notion_key = ""
+    with pytest.raises(ConfigError, match="Notion not configured"):
+        export_summary("# hi", config, metadata=_meta())
+
+
+def test_export_empty_summary(config):
+    with pytest.raises(ExportError, match="empty"):
+        export_summary("   ", config, metadata=_meta(), client=_fake_client())
+
+
+def test_export_creates_new_page(config):
+    client = _fake_client(existing_children=[])
+    url = export_summary("# Title\n\nbody", config, metadata=_meta(), client=client)
+    client.pages.create.assert_called_once()
+    kwargs = client.pages.create.call_args.kwargs
+    # nests under the normalized parent id
+    assert kwargs["parent"]["page_id"] == "39b0ddcb-8908-80ca-adc4-cf292e18f46e"
+    # title carries the video id marker for dedup
+    assert kwargs["properties"]["title"][0]["text"]["content"] == "Agent Memory [BV1nU96BnE6P]"
+    assert "notion.so" in url
+
+
+def test_export_updates_existing_page(config):
+    existing = [{
+        "id": "existing-id-1234", "type": "child_page",
+        "child_page": {"title": "Agent Memory [BV1nU96BnE6P]"},
+    }]
+    client = _fake_client(existing_children=existing)
+    export_summary("# Title\n\nbody", config, metadata=_meta(), client=client)
+    client.pages.create.assert_not_called()  # updated, not duplicated
+    client.blocks.children.append.assert_called()  # rewrote content
+
+
+def test_export_chunks_large_block_lists(config):
+    client = _fake_client(existing_children=[])
+    big_md = "\n\n".join(f"paragraph {i}" for i in range(250))
+    export_summary(big_md, config, metadata=_meta(), client=client)
+    # create gets first<=100; remaining appended in <=100 chunks
+    first = client.pages.create.call_args.kwargs["children"]
+    assert len(first) <= NOTION_BLOCK_LIMIT
+    for call in client.blocks.children.append.call_args_list:
+        assert len(call.kwargs["children"]) <= NOTION_BLOCK_LIMIT
+
+
+def test_export_wraps_api_errors(config):
+    client = _fake_client(existing_children=[])
+    client.pages.create.side_effect = RuntimeError("boom 401")
+    with pytest.raises(ExportError, match="Notion export failed"):
+        export_summary("# hi\n\nx", config, metadata=_meta(), client=client)

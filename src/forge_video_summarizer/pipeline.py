@@ -14,6 +14,7 @@ from .downloaders import get_downloader
 from .errors import DownloadError
 from .models import Transcript, VideoMetadata
 from .stages import (
+    export_summary,
     extract_audio,
     probe_duration,
     summarize_transcript,
@@ -116,16 +117,33 @@ class Pipeline:
         ws.summary_path.write_text(summary, "utf-8")
         return ws.summary_path
 
+    # ── Stage 5 ─────────────────────────────────────────────────────────
+    def run_export(self, ws: Workspace, *, force: bool = False) -> str:
+        """Export summary.md to a Notion subpage; return the page URL.
+        Cached via notion_url.txt (skipped unless force)."""
+        if Workspace.should_skip(ws.notion_url_path, force):
+            return ws.notion_url_path.read_text("utf-8").strip()
+
+        summary = ws.summary_path.read_text("utf-8")
+        metadata = self._read_metadata(ws)
+        url = export_summary(summary, self.config, metadata=metadata)
+        ws.notion_url_path.write_text(url, "utf-8")
+        return url
+
     # ── End-to-end ──────────────────────────────────────────────────────
-    def run_all(self, source: str, *, force: bool = False) -> Path:
-        """Full pipeline: source (URL or local file) -> summary.md path."""
+    def run_all(self, source: str, *, force: bool = False, export: bool = False) -> Path:
+        """Full pipeline: source (URL or local file) -> summary.md path.
+        When export=True, also publishes to Notion (Stage 5)."""
         if _looks_like_url(source):
             ws = self.run_download(source, force=force)
         else:
             ws = self.workspace_for_local(source)
         self.run_extract(ws, force=force)
         self.run_transcribe(ws, force=force)
-        return self.run_summarize(ws, force=force)
+        summary_path = self.run_summarize(ws, force=force)
+        if export:
+            self.run_export(ws, force=force)
+        return summary_path
 
     # ── helpers ─────────────────────────────────────────────────────────
     @staticmethod

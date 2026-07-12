@@ -67,6 +67,10 @@ class Workspace:
     def summary_path(self) -> Path:
         return self.dir / "summary.md"
 
+    @property
+    def notion_url_path(self) -> Path:
+        return self.dir / "notion_url.txt"
+
     def video_path(self, ext: str = "mp4") -> Path:
         return self.dir / f"video.{ext.lstrip('.')}"
 

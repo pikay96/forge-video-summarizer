@@ -28,11 +28,15 @@ def build_parser() -> argparse.ArgumentParser:
         ("extract", "Stage 2: extract audio"),
         ("transcribe", "Stage 3: transcribe"),
         ("summarize-transcript", "Stage 4: summarize an existing transcript"),
+        ("export", "Stage 5: export an existing summary to Notion"),
     ]:
         arg = "url" if name == "download" else "source"
-        sub.add_parser(name, help=help_text).add_argument(
-            arg, help="bilibili URL or local video file path"
-        )
+        p = sub.add_parser(name, help=help_text)
+        p.add_argument(arg, help="bilibili URL or local video file path")
+        if name == "summarize":
+            p.add_argument(
+                "--export", action="store_true", help="also publish to Notion (Stage 5)"
+            )
     return parser
 
 
@@ -49,7 +53,12 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         if args.command == "summarize":
-            print(f"Summary written: {pipeline.run_all(args.source, force=force)}")
+            print(
+                f"Summary written: {pipeline.run_all(args.source, force=force, export=args.export)}"
+            )
+            if args.export:
+                ws = _workspace_for(pipeline, args.source, force=False)
+                print(f"Notion page: {ws.notion_url_path.read_text('utf-8').strip()}")
         elif args.command == "download":
             print(f"Downloaded to: {pipeline.run_download(args.url, force=force).dir}")
         elif args.command == "extract":
@@ -63,6 +72,9 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "summarize-transcript":
             ws = _workspace_for(pipeline, args.source, force=force)
             print(f"Summary written: {pipeline.run_summarize(ws, force=force)}")
+        elif args.command == "export":
+            ws = _workspace_for(pipeline, args.source, force=force)
+            print(f"Notion page: {pipeline.run_export(ws, force=force)}")
     except ForgeError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
