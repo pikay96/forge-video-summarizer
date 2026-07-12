@@ -8,6 +8,40 @@ Pipeline: **download → extract → transcribe → summarize.**
 
 ---
 
+## Overview — working directory & artifacts
+
+Each run operates in a per-video working directory; every stage reads the previous
+stage's file and writes its own, so any stage is independently re-runnable and cached.
+
+```
+output/<sanitized-title>[<video-id>]/
+├── <video>.mp4        # Stage 1  (skipped for local-file input)
+├── metadata.json      # Stage 1  (rich page metadata; ffprobe-only for local files)
+├── audio.mp3          # Stage 2  (16 kHz mono MP3)
+├── transcript.json    # Stage 3  (raw Azure Speech response — source of truth)
+├── transcript.txt     # Stage 3  (human-readable, inline [MM:SS] markers)
+└── summary.md         # Stage 4  (final deliverable)
+```
+
+Caching rule (all stages): if the output artifact already exists, skip; `--force`
+overrides. This lets you re-run just Stage 4 (prompt tweak) without re-downloading or
+re-transcribing.
+
+## CLI commands
+
+| Command      | Input                          | Output                        | Notes |
+|--------------|--------------------------------|-------------------------------|-------|
+| `summarize`  | bilibili URL **or** local file | `summary.md` (runs all 4)     | End-to-end; the common case. |
+| `download`   | bilibili URL                   | `<video>.mp4` + `metadata.json` | Stage 1 only. Skipped for local-file inputs. |
+| `extract`    | video file / working dir       | `audio.mp3`                   | Stage 2 only. |
+| `transcribe` | `audio.mp3`                    | `transcript.json` + `.txt`    | Stage 3 only. |
+| `summarize-transcript` | `transcript.*`       | `summary.md`                  | Stage 4 only (name TBD; distinct from the e2e `summarize`). |
+
+Each per-stage subcommand consumes the previous stage's file output, so stages can be
+run, inspected, and re-run in isolation.
+
+---
+
 ## Stage 1 — Download
 
 ### Goal
@@ -75,11 +109,45 @@ the rest is free provenance. Target fields (grab what's available):
 - `resolution` / available formats
 - `download_timestamp` (when we fetched it)
 
+### Bilibili download mechanics (from reference project)
+Distilled from `simple_bili_download.py` (the headless core of a Tauri downloader;
+UI/frontend intentionally excluded). Auth is a single **SESSDATA cookie** — nothing
+else. Four steps:
+
+1. **Auth / headers** — a `requests.Session` with:
+   - Browser-like `User-Agent` (bilibili web API rejects non-browser UAs).
+   - `Referer: https://www.bilibili.com/` (the media CDN 403s without it).
+   - `SESSDATA` cookie (from a logged-in browser) — the *only* auth token; grants
+     access to higher qualities / member content. Public low-res works without it.
+     Stored in project-local `.env` (`BILI_SESSDATA`).
+2. **bvid → cid** — `GET x/web-interface/view?bvid=<BV...>`. Returns `title` and the
+   `pages` list (a video can have multiple parts 分P, each with its own `cid`). Also
+   the source of the rich `metadata.json`.
+3. **cid → stream URLs (DASH)** — `GET x/player/wbi/playurl?bvid&cid&qn=127&fnval=4048`.
+   - `fnval=4048` → **DASH**: separate **video-only** and **audio-only** streams.
+   - `qn=127` → highest quality the account allows.
+   - **WBI signing NOT required** for `playurl` (only needed for e.g. search).
+   - API returns streams sorted best-first; take `dash["video"][0]` / `dash["audio"][0]`.
+4. **Download + merge** — HTTP GET each stream (Referer header mandatory), then
+   `ffmpeg -i video -i audio -c copy -map 0:v:0 -map 1:a:0 out.mp4 -y` (mux, no re-encode).
+   (Reference does single-stream GET; the full app uses ranged parallel chunks — a
+   speed optimization, optional for v1.)
+
+**Optimization to consider (audio-only path):** DASH exposes the **audio stream
+separately**. For a summarizer we only need audio — Stage 1 could download just
+`dash["audio"][0]` and hand it to Stage 3, **skipping video download AND Stage 2's
+ffmpeg extraction** entirely. Trade-off: the bilibili audio stream is typically AAC
+(m4s) at bilibili's sample rate, so we'd likely still run a light ffmpeg transcode to
+16 kHz mono MP3 for consistency (and to keep the local-file path identical). Decide in
+implementation: (a) keep video+extract uniform across sources, or (b) audio-only
+fast-path for bilibili. Either way the video timeline is preserved (no trimming).
+
+**BV-id extraction:** accept a raw `BVxxxx` id or a full URL; regex `(BV[0-9A-Za-z]+)`.
+
 ### Notes / open items
-- Reference download project (to be shared) will inform the concrete bilibili fetch
-  (API endpoints, signing, stream selection).
-- Multi-part bilibili videos: decide whether v1 downloads a single part or all parts
-  (defer until reference project is reviewed).
+- Multi-part bilibili videos: reference downloads one part via `--page` (1-based). For
+  v1 decide whether to default to part 1 or handle multi-part (defer; likely part-1
+  default with a flag).
 
 ---
 
