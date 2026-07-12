@@ -99,3 +99,42 @@ and does NOT apply here. With a 500 MB / 5-hour ceiling, most videos fit in a si
 request — chunking is only needed for very long content (multi-hour). The chunking +
 timestamp-offset machinery still gets built (for the >5h / >500MB tail and safety
 margin), but it will rarely trigger. Threshold to be set in the Stage 3 spec.
+
+---
+
+## Stage 2 — Audio extraction
+
+### Goal
+Take the video (downloaded in Stage 1, or a local file passed directly) and produce
+the audio file the transcriber ingests.
+
+### Input
+- The video file from Stage 1's working dir, **or** a local video file path (which
+  enters the pipeline here, skipping Stage 1).
+
+### Output (the handoff)
+- `output/<title>[id]/audio.mp3` — **16 kHz mono MP3.**
+  - Chosen over WAV: Azure Speech fast transcription accepts compressed audio; MP3 is
+    ~7 MB/hour vs WAV's ~115 MB/hour, so a video would need to be ~70 h long to hit
+    the 500 MB API limit. Chunking (Stage 3) therefore effectively never fires.
+  - 16 kHz mono is sufficient for speech; no meaningful transcription-quality loss.
+
+### Extraction
+- Plain `ffmpeg` extraction — downmix to mono, resample to 16 kHz, encode MP3:
+  ```
+  ffmpeg -i <video> -vn -ac 1 -ar 16000 -c:a libmp3lame -q:a 4 <out>/audio.mp3
+  ```
+- **No loudness normalization or silence trimming** (deliberate):
+  - Azure Speech handles varied input levels fine.
+  - Silence trimming would shift timestamps and break the anchor-integrity guarantee
+    (Stage 3). Keep the audio timeline identical to the source.
+  - If transcription quality ever disappoints, normalization can be added later as an
+    opt-in — it's not needed for v1.
+
+### Caching
+- If `audio.mp3` already exists in the working dir, **skip re-extraction** (cache hit).
+  A `--force`/overwrite flag can override later if needed.
+
+### Notes
+- For a local-file input with no Stage 1 metadata, `ffprobe` provides duration and
+  basic stream info used downstream.
