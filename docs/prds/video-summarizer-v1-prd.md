@@ -6,8 +6,8 @@
 - **Business Problem**: Watching a full video to extract its knowledge is slow. A
   reader wants to understand a video's content — clearly and completely — without
   watching it end to end.
-- **Target Users**: Primary user is Pikay (personal tool). Feeds it mostly YouTube
-  links, occasionally other sites or local video files.
+- **Target Users**: Primary user is Pikay (personal tool). v1 targets **bilibili.com**
+  links; the download layer is pluggable so other sites (YouTube, etc.) slot in later.
 - **Value Proposition**: Turn any video into a teacher-quality written summary — a
   reader who has never seen the video comes away genuinely understanding the topic,
   with timestamped anchors to jump back into the source when they want detail.
@@ -15,13 +15,15 @@
 ### Feature Overview
 - **Core Features**: A four-stage pipeline, each stage an independent function with
   a file handoff, so any stage is individually re-runnable and its output cacheable:
-  1. **Download** — fetch video (or accept a local file), extract audio.
-  2. **Extract audio** — normalize to the format the transcriber needs.
-  3. **Transcribe** — speech-to-text with timestamps (Azure OpenAI Whisper).
-  4. **Summarize** — LLM turns the transcript into a teacher-clear summary.
+  - **Download** — fetch video (hand-written per-site downloader; v1 = bilibili),
+    write a rich metadata sidecar.
+  - **Extract audio** — normalize to the format the transcriber needs.
+  - **Transcribe** — speech-to-text with timestamps (Azure Speech Services fast
+    transcription).
+  - **Summarize** — LLM turns the transcript into a teacher-clear summary.
 - **Feature Boundaries**:
-  - IN: single video in → single summary out; YouTube + other sites + local files
-    (one code path); auto-chunking of long audio; timestamped anchors in output.
+  - IN: single video in → single summary out; v1 = bilibili URLs (pluggable for more
+    sites later); auto-chunking of long audio; timestamped anchors in output.
   - OUT (v1): playlists / channel batches; live streams; authenticated or private
     videos; multi-video jobs; any GUI.
 - **User Scenarios**:
@@ -48,11 +50,11 @@
   - Configuration (Azure endpoint, credentials, deployment names, tunable params)
     lives in a **project-local `.env`**, never committed.
 - **Edge Cases**:
-  - **Long audio > Whisper 25 MB request limit**: audio is auto-chunked into
+  - **Long audio > transcription API request-size limit**: audio is auto-chunked into
     size-safe segments; each segment is transcribed independently; transcripts are
     stitched back into one.
   - **Timestamp integrity across chunks** (correctness constraint): each chunk's
-    Whisper timestamps restart at 0, so before stitching, every chunk's timestamps
+    segment timestamps restart at 0, so before stitching, every chunk's timestamps
     MUST be offset by that chunk's start time in the original audio. Summary anchors
     must point at true positions in the source video, not chunk-relative positions.
   - **Local file input**: download stage is skipped; pipeline enters at audio extraction.
