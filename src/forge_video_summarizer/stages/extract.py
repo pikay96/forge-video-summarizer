@@ -34,7 +34,7 @@ def extract_audio(video_path: str | Path, out_path: str | Path, *, force: bool =
     ]
     try:
         subprocess.run(cmd, check=True, capture_output=True)
-    except (subprocess.CalledProcessError, FileNotFoundError) as exc:
+    except (subprocess.CalledProcessError, OSError) as exc:
         raise ExtractionError(f"ffmpeg extraction failed: {exc}") from exc
 
     if not out_path.is_file():

@@ -175,7 +175,7 @@ class BilibiliDownloader(Downloader):
                 check=True,
                 capture_output=True,
             )
-        except (subprocess.CalledProcessError, FileNotFoundError) as exc:
+        except (subprocess.CalledProcessError, OSError) as exc:
             raise DownloadError(f"ffmpeg merge failed: {exc}") from exc
 
     # ── metadata mapping ────────────────────────────────────────────────

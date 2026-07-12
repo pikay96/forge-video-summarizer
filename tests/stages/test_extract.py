@@ -70,6 +70,18 @@ def test_extract_ffmpeg_failure(tmp_path):
             extract_audio(video, tmp_path / "audio.mp3")
 
 
+def test_extract_ffmpeg_permission_error(tmp_path):
+    """A non-executable ffmpeg raises PermissionError (OSError) -> clean error."""
+    video = tmp_path / "video.mp4"
+    video.write_text("v")
+    with patch(
+        "forge_video_summarizer.stages.extract.subprocess.run",
+        side_effect=PermissionError(13, "Permission denied"),
+    ):
+        with pytest.raises(ExtractionError, match="failed"):
+            extract_audio(video, tmp_path / "audio.mp3")
+
+
 def test_extract_missing_output(tmp_path):
     video = tmp_path / "video.mp4"
     video.write_text("v")

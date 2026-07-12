@@ -24,7 +24,10 @@ pip install -e ".[dev]"
 cp .env.example .env      # then fill in credentials
 ```
 
-Requires `ffmpeg` (and `ffprobe`) on PATH.
+Requires `ffmpeg` (and `ffprobe`) on PATH. On WSL/Linux without root, a static build
+works: download from https://johnvansickle.com/ffmpeg/, then drop `ffmpeg`/`ffprobe`
+into `~/.local/bin`. (A Windows `ffmpeg.exe` reached via `/mnt/c` PATH can raise
+`PermissionError` under WSL — prefer a native Linux binary.)
 
 ## Configure
 
