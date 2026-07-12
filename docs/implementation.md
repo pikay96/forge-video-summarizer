@@ -191,3 +191,61 @@ transcription, preserving the original language.
 ### Caching
 - If `transcript.json` already exists, skip re-transcription (cache hit); `--force`
   overrides.
+
+---
+
+## Stage 4 — Summarization
+
+### Goal
+Turn the transcript into a teacher-clear written summary — rich enough that a reader
+who never saw the video understands the topic AND could discuss/defend it (e.g. field
+an interviewer's questions on the material).
+
+### Model & API
+- **Azure OpenAI via the OpenAI SDK Responses API** (NOT chat.completions).
+  ```python
+  from openai import OpenAI
+  client = OpenAI(base_url=AZURE_OPENAI_ENDPOINT, api_key=AZURE_OPENAI_API_KEY)
+  #   base_url e.g. https://<res>.services.ai.azure.com/openai/v1
+  resp = client.responses.create(model=DEPLOYMENT, input=<prompt>)
+  ```
+- Deployment (v1): `gpt-5.6-sol`. Endpoint / key / deployment from project-local `.env`.
+
+### Summary language
+- **Match the video's dominant language** (option c). The transcript carries a detected
+  locale (Stage 3); the summary is written in that dominant language. Mixed EN/CN video
+  → summary in whichever dominates.
+
+### Structure (teacher-clear + interview-ready)
+Markdown `summary.md`, length scaling with duration:
+1. **Title** — the video title.
+2. **TL;DR** — 2-3 sentences: what the video is and its single core takeaway.
+3. **Context / why it matters** — brief framing: what problem/topic, who'd care.
+4. **Walkthrough (chapters)** — sectioned by meaningful topic shift, each with a
+   `[MM:SS]` / `[HH:MM:SS]` anchor. Each section *explains* the idea like a teacher
+   (not "he says X" — actually convey the concept, with the reasoning), scaling depth
+   with the video length.
+5. **Key takeaways** — bulleted, what the reader should walk away knowing.
+6. **Q&A / interview prep** — the questions the material answers, each with a concise
+   answer, so a reader could be questioned on the content and hold their own. Include
+   the kind of probing/"why/how" questions an interviewer would ask.
+
+### Anchors
+- **One `[MM:SS]` anchor per meaningful topic shift** (not fixed count). Naturally
+  scales — short video → few, long lecture → many. Model guided by "anchor each real
+  topic transition," anchors reference the original video timeline (from Stage 3
+  segment offsets).
+
+### Long-transcript handling (v1)
+- **v1 assumes the transcript fits the model's context window** (option a) — consistent
+  with the no-chunk philosophy. No map-reduce in v1.
+- If a transcript is too large to fit, **fail with a clear error** rather than silently
+  dropping content. Map-reduce (summarize sections → summarize summaries) is a
+  documented future extension, mirroring the Stage-3 chunking extension point.
+
+### Output (the handoff)
+- `output/<title>[id]/summary.md` — the final deliverable.
+
+### Caching
+- If `summary.md` exists, skip (cache hit); `--force` re-summarizes. Re-running Stage 4
+  alone (e.g. to tweak the prompt) reuses the cached transcript.
