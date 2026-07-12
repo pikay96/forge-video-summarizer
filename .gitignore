@@ -22,3 +22,6 @@ summary.md
 output/
 downloads/
 models/
+.coverage
+htmlcov/
+.ruff_cache/
