@@ -5,10 +5,21 @@ __pycache__/
 venv/
 *.egg-info/
 .pytest_cache/
+.coverage
+htmlcov/
+.ruff_cache/
 
 # Env / secrets
 .env
 *.pat
+
+# Editor — exclude .vscode contents, re-allow shared config (not the debugger .env)
+.vscode/*
+!.vscode/launch.json
+!.vscode/settings.json
+!.vscode/extensions.json
+!.vscode/.env
+.idea/
 
 # Pipeline artifacts
 *.mp4
@@ -22,6 +33,3 @@ summary.md
 output/
 downloads/
 models/
-.coverage
-htmlcov/
-.ruff_cache/

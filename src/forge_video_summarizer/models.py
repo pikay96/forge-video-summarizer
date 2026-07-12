@@ -2,27 +2,17 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass, field, fields
 from typing import Any
 
-__all__ = [
-    "VideoMetadata",
-    "TranscriptSegment",
-    "Transcript",
-    "format_timestamp",
-]
+__all__ = ["VideoMetadata", "TranscriptSegment", "Transcript", "format_timestamp"]
 
 
 def format_timestamp(seconds: float) -> str:
     """Seconds -> ``[MM:SS]`` or ``[HH:MM:SS]`` (the latter when >= 1 hour)."""
-    if seconds < 0:
-        seconds = 0
-    total = int(round(seconds))
-    h, rem = divmod(total, 3600)
+    h, rem = divmod(max(0, int(round(seconds))), 3600)
     m, s = divmod(rem, 60)
-    if h:
-        return f"[{h:02d}:{m:02d}:{s:02d}]"
-    return f"[{m:02d}:{s:02d}]"
+    return f"[{h:02d}:{m:02d}:{s:02d}]" if h else f"[{m:02d}:{s:02d}]"
 
 
 @dataclass
@@ -53,14 +43,13 @@ class VideoMetadata:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "VideoMetadata":
-        known = {f for f in cls.__dataclass_fields__}  # type: ignore[attr-defined]
-        kwargs = {k: v for k, v in data.items() if k in known}
-        return cls(**kwargs)
+        known = {f.name for f in fields(cls)}
+        return cls(**{k: v for k, v in data.items() if k in known})
 
 
 @dataclass
 class TranscriptSegment:
-    """One recognized phrase with timestamps referenced to the original timeline."""
+    """One recognized phrase with timestamps on the original timeline."""
 
     start: float  # seconds
     duration: float  # seconds
@@ -71,7 +60,7 @@ class TranscriptSegment:
         return self.start + self.duration
 
     def to_dict(self) -> dict[str, Any]:
-        return {"start": self.start, "duration": self.duration, "text": self.text}
+        return asdict(self)
 
 
 @dataclass
@@ -84,16 +73,13 @@ class Transcript:
 
     @property
     def duration(self) -> float:
-        if not self.segments:
-            return 0.0
-        return max(seg.end for seg in self.segments)
+        return max((s.end for s in self.segments), default=0.0)
 
     def to_timestamped_text(self) -> str:
         """Human-readable transcript with an inline anchor per segment."""
-        lines = []
-        for seg in self.segments:
-            lines.append(f"{format_timestamp(seg.start)} {seg.text}".rstrip())
-        return "\n".join(lines)
+        return "\n".join(
+            f"{format_timestamp(s.start)} {s.text}".rstrip() for s in self.segments
+        )
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -104,14 +90,8 @@ class Transcript:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "Transcript":
-        segs = [
-            TranscriptSegment(
-                start=s["start"], duration=s["duration"], text=s["text"]
-            )
-            for s in data.get("segments", [])
-        ]
         return cls(
-            segments=segs,
+            segments=[TranscriptSegment(**s) for s in data.get("segments", [])],
             locale=data.get("locale", ""),
             full_text=data.get("full_text", ""),
         )

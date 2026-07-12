@@ -89,6 +89,13 @@ pytest --cov=forge_video_summarizer --cov-report=term-missing
 ruff check src tests
 ```
 
+## Debugging (VS Code F5)
+
+`.vscode/` is committed. Open the folder and press **F5** — configurations are provided
+for: run current file, run the CLI (`summarize` with a URL/path prompt), pytest current
+file, and pytest all. `.vscode/.env` sets `PYTHONPATH=src` so imports resolve before an
+editable install. Also runnable as a module: `python -m forge_video_summarizer …`.
+
 ## Docs
 
 - PRD: [`docs/prds/video-summarizer-v1-prd.md`](docs/prds/video-summarizer-v1-prd.md)

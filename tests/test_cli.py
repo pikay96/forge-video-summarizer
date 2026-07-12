@@ -83,3 +83,12 @@ def test_error_returns_exit_code_1(capsys):
         rc = main(["summarize", "https://www.bilibili.com/video/BV1"])
     assert rc == 1
     assert "boom" in capsys.readouterr().err
+
+
+def test_module_entrypoint_runs():
+    import runpy
+
+    with patch("forge_video_summarizer.cli.main", return_value=0):
+        with pytest.raises(SystemExit) as exc:
+            runpy.run_module("forge_video_summarizer", run_name="__main__")
+    assert exc.value.code == 0

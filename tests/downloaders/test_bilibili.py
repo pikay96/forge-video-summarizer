@@ -152,6 +152,13 @@ def test_get_downloader_selects_bilibili():
     assert isinstance(dl, BilibiliDownloader)
 
 
+def test_build_downloaders_returns_list():
+    from forge_video_summarizer.downloaders import build_downloaders
+    dls = build_downloaders(Config())
+    assert len(dls) == 1
+    assert isinstance(dls[0], BilibiliDownloader)
+
+
 def test_view_api_network_error():
     session = MagicMock()
     import requests as _rq
