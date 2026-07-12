@@ -1,7 +1,9 @@
-"""Stage 2 — Audio extraction. ffmpeg -> 16 kHz mono MP3.
+"""Stage 2 — Audio extraction. ffmpeg -> 16 kHz mono PCM WAV.
 
 Plain extraction (no loudness normalization / silence trimming) so the audio
-timeline stays identical to the source and anchors remain accurate.
+timeline stays identical to the source and anchors remain accurate. Output is WAV
+(16 kHz mono PCM) — a format the fast-transcription endpoint accepts directly, and
+what a future SDK path would want too. WAV is larger than MP3 on disk (~115 MB/h).
 """
 
 from __future__ import annotations
@@ -16,7 +18,7 @@ __all__ = ["extract_audio", "probe_duration"]
 
 
 def extract_audio(video_path: str | Path, out_path: str | Path, *, force: bool = False) -> Path:
-    """Extract 16 kHz mono MP3 from a video file. Cache-skips unless force."""
+    """Extract 16 kHz mono PCM WAV from a video file. Cache-skips unless force."""
     video_path = Path(video_path)
     out_path = Path(out_path)
 
@@ -29,7 +31,7 @@ def extract_audio(video_path: str | Path, out_path: str | Path, *, force: bool =
     cmd = [
         "ffmpeg", "-i", str(video_path),
         "-vn", "-ac", "1", "-ar", "16000",
-        "-c:a", "libmp3lame", "-q:a", "4",
+        "-c:a", "pcm_s16le",
         str(out_path), "-y",
     ]
     try:

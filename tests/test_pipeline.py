@@ -94,11 +94,10 @@ def test_run_transcribe_cache_hit(config, tmp_path):
     pipe = Pipeline(config, output_root=tmp_path)
     ws = Workspace(tmp_path, "T", "BV1")
     ws.ensure()
-    # Cache holds the RAW Azure response shape (source of truth).
+    # Cache holds the RAW Azure fast-transcription response (source of truth).
     raw = {
-        "durationMilliseconds": 1000,
         "combinedPhrases": [{"text": "hi"}],
-        "phrases": [{"offsetMilliseconds": 0, "durationMilliseconds": 1000, "text": "hi", "locale": "en-US"}],
+        "phrases": [{"offsetMilliseconds": 0, "durationMilliseconds": 1000, "locale": "zh-CN", "text": "hi"}],
     }
     ws.transcript_json_path.write_text(json.dumps(raw))
 
@@ -106,7 +105,7 @@ def test_run_transcribe_cache_hit(config, tmp_path):
         result = pipe.run_transcribe(ws, force=False)
     tr.assert_not_called()
     assert result.segments[0].text == "hi"
-    assert result.locale == "en-US"
+    assert result.locale == "zh-CN"
 
 
 def test_run_transcribe_writes_artifacts(config, tmp_path):
@@ -159,9 +158,8 @@ def test_run_summarize_writes(config, tmp_path):
     ws = Workspace(tmp_path, "T", "BV1")
     ws.ensure()
     t_raw = {
-        "durationMilliseconds": 1000,
         "combinedPhrases": [{"text": "hi"}],
-        "phrases": [{"offsetMilliseconds": 0, "durationMilliseconds": 1000, "text": "hi", "locale": "en-US"}],
+        "phrases": [{"offsetMilliseconds": 0, "durationMilliseconds": 1000, "locale": "zh-CN", "text": "hi"}],
     }
     ws.transcript_json_path.write_text(json.dumps(t_raw))
     ws.metadata_path.write_text(json.dumps(VideoMetadata(video_id="BV1", title="T").to_dict()))

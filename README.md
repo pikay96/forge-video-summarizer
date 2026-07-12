@@ -7,9 +7,9 @@ function with a file handoff so any stage is re-runnable and cacheable.
 video URL / local file
    │  hand-written per-site downloader (v1: bilibili)   → video.mp4 + metadata.json
    ▼
-audio.mp3 (16 kHz mono)  │  ffmpeg
+audio.wav (16 kHz mono)  │  ffmpeg
    │
-   ▼  transcribe model  (Azure Speech fast transcription)
+   ▼  transcribe model  (Azure Speech fast transcription — real timestamps, multi-locale)
 transcript.json + transcript.txt (segment timestamps)
    │
    ▼  LLM summarize      (Azure OpenAI Responses API)
@@ -34,7 +34,8 @@ into `~/.local/bin`. (A Windows `ffmpeg.exe` reached via `/mnt/c` PATH can raise
 Copy `.env.example` to `.env` and set:
 
 - `BILI_SESSDATA` — SESSDATA cookie from a logged-in bilibili session (only auth needed).
-- `AZURE_SPEECH_ENDPOINT` / `AZURE_SPEECH_KEY` — Azure Speech fast transcription.
+- `AZURE_SPEECH_ENDPOINT` / `AZURE_SPEECH_KEY` — Azure Speech (fast transcription).
+  `AZURE_SPEECH_LANGUAGES` (optional) sets candidate locales for language ID.
 - `AZURE_OPENAI_ENDPOINT` / `AZURE_OPENAI_API_KEY` / `AZURE_OPENAI_DEPLOYMENT` — summarization.
 
 ## Usage
@@ -50,7 +51,7 @@ Per-stage (each consumes the previous stage's file output):
 
 ```bash
 fvs download   <bilibili-url>      # Stage 1 → video.mp4 + metadata.json
-fvs extract    <url|local-file>    # Stage 2 → audio.mp3
+fvs extract    <url|local-file>    # Stage 2 → audio.wav
 fvs transcribe <url|local-file>    # Stage 3 → transcript.json + .txt
 fvs summarize-transcript <url|local-file>   # Stage 4 → summary.md
 ```
@@ -62,11 +63,13 @@ Flags: `--output <dir>` (default `output/`), `--force` (ignore cache), `--env <p
 1. **Download** — hand-written per-site downloader behind a pluggable interface
    (v1 = bilibili: SESSDATA auth, `view` → `playurl` DASH → ffmpeg mux). Always keeps
    the full video (planned visual capability needs it). Rich `metadata.json` sidecar.
-2. **Extract audio** — `ffmpeg` → 16 kHz mono MP3. No normalization/trimming (keeps the
+2. **Extract audio** — `ffmpeg` → 16 kHz mono PCM WAV (exactly what the Speech SDK
+   consumes, so Stage 3 needs no re-transcode). No normalization/trimming (keeps the
    timeline identical so anchors stay accurate).
-3. **Transcribe** — Azure Speech fast transcription (enhanced mode, auto language ID,
-   segment timestamps). Original language preserved. No chunking in v1 (500 MB / 5 h
-   ceiling); oversized inputs fail with a clear error.
+3. **Transcribe** — Azure Speech **fast transcription** (REST, synchronous). Real
+   per-segment timestamps (genuine phrase offsets, not interpolated) and multi-locale
+   language ID (`locales`, default zh-CN + en-US). NOT enhancedMode/MAI (which collapses
+   output to one phrase). ~34s for a 27-min video. Original language preserved.
 4. **Summarize** — Azure OpenAI Responses API. Teacher-clear + interview-ready markdown,
    length scales with duration, one `[MM:SS]` anchor per meaningful topic shift.
 

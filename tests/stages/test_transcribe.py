@@ -1,152 +1,136 @@
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
+import requests
 
 from forge_video_summarizer.errors import AudioTooLongError, TranscriptionError
 from forge_video_summarizer.stages.transcribe import (
-    MAX_AUDIO_BYTES,
+    _build_definition,
     parse_response,
     transcribe_audio,
 )
 
-RESPONSE = {
-    "combinedPhrases": [{"text": "Hello world. Second part."}],
+# ── parse_response (raw Azure fast-transcription response → Transcript) ──────
+
+RAW = {
+    "durationMilliseconds": 40000,
+    "combinedPhrases": [{"text": "欢迎各位。记忆很重要。"}],
     "phrases": [
-        {"offsetMilliseconds": 0, "durationMilliseconds": 2000, "text": "Hello world.", "locale": "en-US"},
-        {"offsetMilliseconds": 65000, "durationMilliseconds": 3000, "text": "Second part.", "locale": "en-US"},
+        {"offsetMilliseconds": 280, "durationMilliseconds": 15000, "locale": "zh-CN", "text": "欢迎各位。"},
+        {"offsetMilliseconds": 15600, "durationMilliseconds": 3000, "locale": "zh-CN", "text": "记忆很重要。"},
     ],
 }
 
 
-def test_parse_response_segments():
-    t = parse_response(RESPONSE)
+def test_parse_response_uses_real_offsets():
+    t = parse_response(RAW)
     assert len(t.segments) == 2
-    assert t.segments[0].start == 0.0
-    assert t.segments[0].duration == 2.0
-    assert t.segments[1].start == 65.0
-    assert t.locale == "en-US"
-    assert t.full_text == "Hello world. Second part."
-
-
-def test_parse_response_skips_empty_text():
-    payload = {"phrases": [{"offsetMilliseconds": 0, "durationMilliseconds": 1000, "text": "  "}]}
-    t = parse_response(payload)
-    assert t.segments == []
-
-
-def test_parse_response_no_combined_falls_back():
-    payload = {
-        "phrases": [
-            {"offsetMilliseconds": 0, "durationMilliseconds": 1000, "text": "a"},
-            {"offsetMilliseconds": 1000, "durationMilliseconds": 1000, "text": "b"},
-        ]
-    }
-    t = parse_response(payload)
-    assert t.full_text == "a b"
-
-
-def test_parse_response_single_phrase_interpolates():
-    """MAI returns one phrase -> sentence split with interpolated timestamps."""
-    payload = {
-        "durationMilliseconds": 100000,  # 100 s
-        "combinedPhrases": [{"text": "First sentence. Second one. Third here."}],
-        "phrases": [
-            {
-                "offsetMilliseconds": 0,
-                "durationMilliseconds": 100000,
-                "text": "First sentence. Second one. Third here.",
-                "locale": "zh-CN",
-            }
-        ],
-    }
-    t = parse_response(payload)
-    assert len(t.segments) == 3
-    # Monotonic, start at 0, within total duration.
-    starts = [s.start for s in t.segments]
-    assert starts[0] == 0.0
-    assert starts == sorted(starts)
-    assert t.segments[-1].start < 100.0
+    assert t.segments[0].start == pytest.approx(0.28)
+    assert t.segments[1].start == pytest.approx(15.6)
     assert t.locale == "zh-CN"
-    assert t.full_text == "First sentence. Second one. Third here."
+    assert t.approximate_timestamps is False
+    assert t.full_text == "欢迎各位。记忆很重要。"
 
 
-def test_parse_response_single_phrase_no_duration():
-    """Single phrase but no duration -> one fallback segment, no crash."""
-    payload = {"phrases": [{"offsetMilliseconds": 0, "text": "Only text no time."}]}
+def test_parse_response_skips_empty_and_derives_full_text():
+    payload = {"phrases": [
+        {"offsetMilliseconds": 0, "durationMilliseconds": 1000, "text": "a"},
+        {"offsetMilliseconds": 1000, "durationMilliseconds": 1000, "text": "  "},
+        {"offsetMilliseconds": 2000, "durationMilliseconds": 1000, "text": "b"},
+    ]}
     t = parse_response(payload)
-    assert len(t.segments) == 1
-    assert t.segments[0].text == "Only text no time."
+    assert [s.text for s in t.segments] == ["a", "b"]
+    assert t.full_text == "ab"  # no combinedPhrases -> joined from segments
 
 
 def test_parse_response_empty():
     assert parse_response({}).segments == []
 
 
+# ── _build_definition ───────────────────────────────────────────────────────
+
+def test_definition_has_locales_no_enhanced_mode(config):
+    d = _build_definition(config)
+    assert d["locales"] == ["zh-CN", "en-US"]
+    assert "enhancedMode" not in d  # plain fast transcription
+
+
+def test_definition_blank_languages_falls_back(config):
+    config.speech_languages = "  "
+    assert _build_definition(config)["locales"] == ["zh-CN", "en-US"]
+
+
+# ── transcribe_audio (mocked HTTP) ──────────────────────────────────────────
+
+def _session_returning(status, payload=None, text=""):
+    resp = MagicMock()
+    resp.status_code = status
+    resp.json.return_value = payload if payload is not None else {}
+    resp.text = text
+    sess = MagicMock()
+    sess.post.return_value = resp
+    return sess
+
+
 def test_transcribe_missing_file(config, tmp_path):
     with pytest.raises(TranscriptionError, match="not found"):
-        transcribe_audio(tmp_path / "nope.mp3", config)
-
-
-def test_transcribe_too_large(config, tmp_path):
-    audio = tmp_path / "audio.mp3"
-    # Create a sparse file just over the size limit (no real disk use).
-    with open(audio, "wb") as f:
-        f.truncate(MAX_AUDIO_BYTES + 1)
-    with pytest.raises(AudioTooLongError, match="MB"):
-        transcribe_audio(audio, config)
-
-
-def test_transcribe_too_long_duration(config, tmp_path):
-    audio = tmp_path / "audio.mp3"
-    audio.write_bytes(b"x")
-    with pytest.raises(AudioTooLongError, match="h,"):
-        transcribe_audio(audio, config, duration=6 * 3600)
+        transcribe_audio(tmp_path / "nope.wav", config)
 
 
 def test_transcribe_success(config, tmp_path):
-    audio = tmp_path / "audio.mp3"
-    audio.write_bytes(b"audio-bytes")
-
-    session = MagicMock()
-    session.post.return_value = MagicMock(status_code=200, json=lambda: RESPONSE)
-
-    t = transcribe_audio(audio, config, duration=100, session=session)
+    audio = tmp_path / "audio.wav"
+    audio.write_bytes(b"x")
+    sess = _session_returning(200, RAW)
+    t = transcribe_audio(audio, config, session=sess)
     assert len(t.segments) == 2
-    # verify request shape
-    _, kwargs = session.post.call_args
-    assert kwargs["headers"]["Ocp-Apim-Subscription-Key"] == "speech-key"
-    assert "definition" in kwargs["data"]
-    assert "audio" in kwargs["files"]
+    assert t.segments[0].start == pytest.approx(0.28)
+    assert t.locale == "zh-CN"
+    assert t.raw == RAW  # raw response retained as source of truth
+    # sent multipart audio + a definition with locales, no enhancedMode
+    kwargs = sess.post.call_args.kwargs
+    import json as _json
+    definition = _json.loads(kwargs["data"]["definition"])
+    assert definition["locales"] == ["zh-CN", "en-US"]
+    assert "enhancedMode" not in definition
 
 
-def test_transcribe_http_error(config, tmp_path):
-    audio = tmp_path / "audio.mp3"
+def test_transcribe_api_error(config, tmp_path):
+    audio = tmp_path / "audio.wav"
     audio.write_bytes(b"x")
-    session = MagicMock()
-    session.post.return_value = MagicMock(status_code=400, text="bad request")
-    with pytest.raises(TranscriptionError, match="400"):
-        transcribe_audio(audio, config, duration=1, session=session)
+    sess = _session_returning(400, text="bad locale")
+    with pytest.raises(TranscriptionError, match="returned 400"):
+        transcribe_audio(audio, config, session=sess)
 
 
-def test_transcribe_definition_matches_reference(config, tmp_path):
-    audio = tmp_path / "audio.mp3"
+def test_transcribe_no_speech(config, tmp_path):
+    audio = tmp_path / "audio.wav"
     audio.write_bytes(b"x")
-    session = MagicMock()
-    captured = {}
+    sess = _session_returning(200, {"phrases": []})
+    with pytest.raises(TranscriptionError, match="no speech"):
+        transcribe_audio(audio, config, session=sess)
 
-    def fake_post(url, **kw):
-        captured.update(kw)
-        return MagicMock(status_code=200, json=lambda: RESPONSE)
 
-    session.post.side_effect = fake_post
-    transcribe_audio(audio, config, duration=1, session=session)
+def test_transcribe_network_error(config, tmp_path):
+    audio = tmp_path / "audio.wav"
+    audio.write_bytes(b"x")
+    sess = MagicMock()
+    sess.post.side_effect = requests.RequestException("boom")
+    with pytest.raises(TranscriptionError, match="request failed"):
+        transcribe_audio(audio, config, session=sess)
 
-    import json
-    definition = json.loads(captured["data"]["definition"])
-    assert definition["enhancedMode"]["enabled"] is True
-    assert definition["enhancedMode"]["model"] == "mai-transcribe-1.5"
-    assert definition["phraseList"]["phrases"] == []
-    # No `locales` field — MAI auto-detects (sending it is rejected in enhanced mode).
-    assert "locales" not in definition
+
+def test_transcribe_rejects_oversized_file(config, tmp_path):
+    audio = tmp_path / "audio.wav"
+    audio.write_bytes(b"0123456789")  # 10 bytes
+    with patch("forge_video_summarizer.stages.transcribe.MAX_AUDIO_BYTES", 5):
+        with pytest.raises(AudioTooLongError, match="MB"):
+            transcribe_audio(audio, config)
+
+
+def test_transcribe_rejects_overlong_duration(config, tmp_path):
+    audio = tmp_path / "audio.wav"
+    audio.write_bytes(b"x")
+    with pytest.raises(AudioTooLongError, match="h,"):
+        transcribe_audio(audio, config, duration=3 * 60 * 60)

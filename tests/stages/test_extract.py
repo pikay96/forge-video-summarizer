@@ -40,6 +40,7 @@ def test_extract_runs_ffmpeg(tmp_path):
     cmd = run.call_args[0][0]
     assert "-ar" in cmd and "16000" in cmd
     assert "-ac" in cmd and "1" in cmd
+    assert "pcm_s16le" in cmd  # WAV output for the Speech SDK
     assert result.exists()
 
 

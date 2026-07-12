@@ -53,7 +53,7 @@ class Workspace:
 
     @property
     def audio_path(self) -> Path:
-        return self.dir / "audio.mp3"
+        return self.dir / "audio.wav"
 
     @property
     def transcript_json_path(self) -> Path:

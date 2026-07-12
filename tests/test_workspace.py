@@ -38,7 +38,7 @@ def test_workspace_dir_naming_no_id(tmp_path):
 
 def test_workspace_artifact_paths(tmp_path):
     ws = Workspace(tmp_path, "T", "BV1")
-    assert ws.audio_path.name == "audio.mp3"
+    assert ws.audio_path.name == "audio.wav"
     assert ws.transcript_json_path.name == "transcript.json"
     assert ws.transcript_txt_path.name == "transcript.txt"
     assert ws.summary_path.name == "summary.md"
