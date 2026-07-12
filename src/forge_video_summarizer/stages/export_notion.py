@@ -56,14 +56,30 @@ def linkify_timestamps(text: str, video_url: str) -> list[dict]:
         label = m.group(0)
         if video_url:
             sec = _ts_to_seconds(m)
-            sep = "&" if "?" in video_url else "?"
-            spans.append(_text_span(label, link=f"{video_url}{sep}t={sec}"))
+            spans.append(_text_span(label, link=_timed_url(video_url, sec)))
         else:
             spans.append(_text_span(label))
         pos = m.end()
     if pos < len(text):
         spans.append(_text_span(text[pos:]))
     return spans or [_text_span("")]
+
+
+def _timed_url(video_url: str, seconds: int) -> str:
+    """Build a bilibili deep link that actually seeks on click.
+
+    bilibili's player only honors `t=<sec>` reliably when the path has a trailing
+    slash BEFORE the query (`/video/BVxxx/?t=123`). Without it, bilibili 301-redirects
+    to the slash form and the SPA player initializes at 0 first, landing at the start.
+    So we normalize the path to end with `/` before appending the query, and merge
+    into any existing query string.
+    """
+    from urllib.parse import urlsplit, urlunsplit
+
+    parts = urlsplit(video_url)
+    path = parts.path if parts.path.endswith("/") else parts.path + "/"
+    query = f"{parts.query}&t={seconds}" if parts.query else f"t={seconds}"
+    return urlunsplit((parts.scheme, parts.netloc, path, query, parts.fragment))
 
 
 def _text_span(content: str, *, link: str | None = None, code: bool = False) -> dict:
@@ -222,21 +238,13 @@ def _find_existing(client: Any, parent_id: str, marker_title: str) -> str | None
         return None
 
 
-def _archive_children(client: Any, page_id: str) -> None:
-    """Archive all existing child blocks of a page (clears it before rewrite)."""
-    cursor = None
-    ids: list[str] = []
-    while True:
-        resp = client.blocks.children.list(block_id=page_id, start_cursor=cursor)
-        ids.extend(c["id"] for c in resp.get("results", []))
-        if not resp.get("has_more"):
-            break
-        cursor = resp.get("next_cursor")
-    for bid in ids:
-        try:
-            client.blocks.delete(block_id=bid)
-        except Exception:  # noqa: BLE001 - continue clearing best-effort
-            pass
+def _archive_page(client: Any, page_id: str) -> None:
+    """Archive (soft-delete) an entire subpage in ONE call. Far cheaper than
+    deleting child blocks individually, and avoids rate-limit storms on long pages."""
+    try:
+        client.pages.update(page_id=page_id, archived=True)
+    except Exception:  # noqa: BLE001 - best-effort; a fresh page is still created
+        pass
 
 
 def export_summary(
@@ -246,7 +254,12 @@ def export_summary(
     metadata: VideoMetadata | None = None,
     client: Any | None = None,
 ) -> str:
-    """Create/update a Notion subpage for this summary. Returns the page URL."""
+    """Create/update a Notion subpage for this summary. Returns the page URL.
+
+    Idempotency strategy: if a subpage with the same video-id marker title already
+    exists under the parent, archive it wholesale (one call) and create a fresh page.
+    This is dramatically faster than clearing hundreds of child blocks one-by-one.
+    """
     config.require_notion()
     if not summary_markdown.strip():
         raise ExportError("Summary is empty; nothing to export")
@@ -266,16 +279,13 @@ def export_summary(
     try:
         existing = _find_existing(client, parent_id, marker_title)
         if existing:
-            _archive_children(client, existing)
-            page_id = existing
-            client.blocks.children.append(block_id=page_id, children=first)
-        else:
-            page = client.pages.create(
-                parent={"type": "page_id", "page_id": parent_id},
-                properties={"title": [{"type": "text", "text": {"content": marker_title}}]},
-                children=first,
-            )
-            page_id = page["id"]
+            _archive_page(client, existing)  # one call, then recreate fresh
+        page = client.pages.create(
+            parent={"type": "page_id", "page_id": parent_id},
+            properties={"title": [{"type": "text", "text": {"content": marker_title}}]},
+            children=first,
+        )
+        page_id = page["id"]
         for chunk in _chunked(rest, NOTION_BLOCK_LIMIT):
             client.blocks.children.append(block_id=page_id, children=chunk)
     except ExportError:
