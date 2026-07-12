@@ -50,13 +50,11 @@
   - Configuration (Azure endpoint, credentials, deployment names, tunable params)
     lives in a **project-local `.env`**, never committed.
 - **Edge Cases**:
-  - **Long audio > transcription API request-size limit**: audio is auto-chunked into
-    size-safe segments; each segment is transcribed independently; transcripts are
-    stitched back into one.
-  - **Timestamp integrity across chunks** (correctness constraint): each chunk's
-    segment timestamps restart at 0, so before stitching, every chunk's timestamps
-    MUST be offset by that chunk's start time in the original audio. Summary anchors
-    must point at true positions in the source video, not chunk-relative positions.
+  - **Long audio > transcription API limits**: Azure Speech fast transcription allows
+    up to 500 MB / 5 h per request, which covers realistic inputs. v1 does **not**
+    chunk; if an input exceeds the limit it **fails with a clear error** (no silent
+    truncation). Chunking + per-chunk timestamp offsetting is retained as a documented
+    future extension point.
   - **Local file input**: download stage is skipped; pipeline enters at audio extraction.
   - **Unsupported / unreachable source**: fail clearly with an actionable message
     rather than producing a partial or empty summary.
@@ -104,10 +102,10 @@
 - [ ] Each of the four stages (`download`, `extract`, `transcribe`, `summarize`) runs
       standalone against the previous stage's file output.
 - [ ] Local video file input is accepted and correctly skips the download stage.
-- [ ] Audio exceeding the Whisper 25 MB limit is auto-chunked, transcribed, and stitched
-      into a single coherent transcript.
+- [ ] Audio within the API limits is transcribed in a single request; audio exceeding
+      the 500 MB / 5 h limit fails with a clear error (no silent truncation).
 - [ ] Summary anchors in `[MM:SS]`/`[HH:MM:SS]` point to correct positions in the
-      original video (verified on a video long enough to force chunking).
+      original video.
 - [ ] Summary length scales with video duration and reads as teacher-clear: a reader
       who never saw the video understands the topic.
 

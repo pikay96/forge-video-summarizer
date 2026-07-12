@@ -138,3 +138,56 @@ the audio file the transcriber ingests.
 ### Notes
 - For a local-file input with no Stage 1 metadata, `ffprobe` provides duration and
   basic stream info used downstream.
+
+---
+
+## Stage 3 — Transcription
+
+### Goal
+Turn `audio.mp3` into a timestamped transcript, via Azure Speech Services fast
+transcription, preserving the original language.
+
+### API
+- **Azure Speech Services fast transcription** — `POST {endpoint}/speechtotext/
+  transcriptions:transcribe?api-version=2025-10-15`.
+- multipart/form-data: `audio=@audio.mp3` + a `definition` JSON.
+- Auth via `Ocp-Apim-Subscription-Key` (endpoint + key from project-local `.env`).
+
+### `definition` config (v1)
+- **`enhancedMode`: enabled**, model `mai-transcribe-1.5`, `transcribeStyle: verbatim`
+  (better quality).
+- **`phraseList.phrases`: empty but wired** — the field is present and pluggable so
+  domain terms can be injected per-run later; ships empty in v1.
+- **Language: auto-detect** (language identification). Bilibili content is frequently
+  mixed English/Chinese, so a fixed locale is wrong. Provide candidate locales
+  (e.g. `zh-CN`, `en-US`) for LID rather than pinning one.
+- **Transcript stays in the ORIGINAL language** — no translation at this stage.
+  (Translation, if ever wanted, is a Stage-4 summary concern, not transcription.)
+
+### Timestamp granularity
+- **Segment / phrase level** (offset + duration per recognized phrase) — sufficient
+  for `[MM:SS]` topic anchors. Word-level not needed for v1.
+
+### Output (the handoff) — both artifacts
+- `output/<title>[id]/transcript.json` — **raw Azure response** (source of truth:
+  phrases, offsets, durations, confidence, detected locale).
+- `output/<title>[id]/transcript.txt` — **derived human-readable** transcript with
+  inline `[MM:SS]` / `[HH:MM:SS]` markers per segment.
+- Stage 4 may consume either; keeping both fits the explicit file-handoff design and
+  lets the transcript be eyeballed.
+
+### Chunking (v1: OFF, extension point retained)
+- **v1 does NOT chunk.** The 500 MB / 5 h fast-transcription ceiling comfortably covers
+  realistic inputs (16 kHz mono MP3 ≈ 7 MB/h → ~70 h to reach 500 MB; the 5 h limit
+  binds first).
+- **Guard, not silent truncation**: before calling the API, check duration/size against
+  the limits (e.g. > ~5 h or > ~500 MB). If exceeded, **fail with a clear, actionable
+  error** telling the user the input is too long for v1 — never truncate silently.
+- **Extensibility**: the chunk → per-chunk-timestamp-offset → stitch design is kept as
+  a documented future path (single place to implement). When added, each chunk's
+  segment timestamps MUST be offset by the chunk's start time before stitching so
+  anchors stay true to the original timeline.
+
+### Caching
+- If `transcript.json` already exists, skip re-transcription (cache hit); `--force`
+  overrides.
