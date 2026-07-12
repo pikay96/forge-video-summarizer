@@ -1,6 +1,6 @@
 # forge-video-summarizer
 
-Local-capable video-to-summary pipeline. Four independent stages, each a clean
+Local-capable video-to-summary pipeline. Five independent stages, each a clean
 function with a file handoff so any stage is re-runnable and cacheable.
 
 ```
@@ -14,6 +14,9 @@ transcript.json + transcript.txt (segment timestamps)
    │
    ▼  LLM summarize      (Azure OpenAI Responses API)
 summary.md   (teacher-clear + interview-ready, [MM:SS] anchors)
+   │
+   ▼  export             (Notion SDK)
+Notion subpage   (embedded video + metadata + summary, clickable timestamp links)
 ```
 
 ## Install
@@ -37,6 +40,9 @@ Copy `.env.example` to `.env` and set:
 - `AZURE_SPEECH_ENDPOINT` / `AZURE_SPEECH_KEY` — Azure Speech (fast transcription).
   `AZURE_SPEECH_MODEL` (optional) sets the enhanced model, default `mai-transcribe-1.5`.
 - `AZURE_OPENAI_ENDPOINT` / `AZURE_OPENAI_API_KEY` / `AZURE_OPENAI_DEPLOYMENT` — summarization.
+- `NOTION_API_KEY` / `NOTION_PARENT_PAGE_ID` — Notion export (Stage 5). The integration
+  must be connected to the parent page (page ••• → Connections). `NOTION_PARENT_PAGE_ID`
+  accepts a bare id, dashed UUID, or a full Notion page URL.
 
 ## Usage
 
@@ -45,6 +51,7 @@ End-to-end (the common case):
 ```bash
 fvs summarize https://www.bilibili.com/video/BV1xxxxxxx
 fvs summarize /path/to/local/video.mp4
+fvs summarize <url> --export        # also publish to Notion (Stage 5)
 ```
 
 Per-stage (each consumes the previous stage's file output):
@@ -54,6 +61,7 @@ fvs download   <bilibili-url>      # Stage 1 → video.mp4 + metadata.json
 fvs extract    <url|local-file>    # Stage 2 → audio.wav
 fvs transcribe <url|local-file>    # Stage 3 → transcript.json + .txt
 fvs summarize-transcript <url|local-file>   # Stage 4 → summary.md
+fvs export     <url|local-file>    # Stage 5 → Notion subpage (needs summary.md)
 ```
 
 Flags: `--output <dir>` (default `output/`), `--force` (ignore cache), `--env <path>`.
@@ -63,9 +71,9 @@ Flags: `--output <dir>` (default `output/`), `--force` (ignore cache), `--env <p
 1. **Download** — hand-written per-site downloader behind a pluggable interface
    (v1 = bilibili: SESSDATA auth, `view` → `playurl` DASH → ffmpeg mux). Always keeps
    the full video (planned visual capability needs it). Rich `metadata.json` sidecar.
-2. **Extract audio** — `ffmpeg` → 16 kHz mono PCM WAV (exactly what the Speech SDK
-   consumes, so Stage 3 needs no re-transcode). No normalization/trimming (keeps the
-   timeline identical so anchors stay accurate).
+2. **Extract audio** — `ffmpeg` → 16 kHz mono PCM WAV (the format the fast-transcription
+   endpoint accepts directly). No normalization/trimming (keeps the timeline identical so
+   anchors stay accurate).
 3. **Transcribe** — Azure Speech **fast transcription** with **enhancedMode (MAI)** for
    best mixed zh/en text quality (recovers inline English terms + punctuation). ~9s for
    a 27-min video. MAI returns one block, so per-segment `[MM:SS]` anchors are
@@ -73,6 +81,12 @@ Flags: `--output <dir>` (default `output/`), `--force` (ignore cache), `--env <p
    response as source of truth.
 4. **Summarize** — Azure OpenAI Responses API. Teacher-clear + interview-ready markdown,
    length scales with duration, one `[MM:SS]` anchor per meaningful topic shift.
+5. **Export** — publishes `summary.md` to Notion as a **subpage** of a configured parent
+   page (official `notion-client` SDK). Each page carries an embedded bilibili video, a
+   metadata callout, and the summary as native blocks; `[MM:SS]` anchors become clickable
+   `?t=<sec>` links into the video. Idempotent (dedups by video-id marker in the title,
+   updates in place) and chunks block appends at Notion's 100-per-request limit. Audio and
+   transcript are intentionally excluded.
 
 ## Layout
 
@@ -85,8 +99,8 @@ src/forge_video_summarizer/
 ├── models.py         # VideoMetadata, Transcript, TranscriptSegment
 ├── errors.py         # typed exceptions
 ├── downloaders/      # pluggable per-site (base + bilibili + registry)
-└── stages/           # extract, transcribe, summarize
-tests/                # 87 unit tests, ~97% coverage (network/subprocess mocked)
+└── stages/           # extract, transcribe, summarize, export_notion
+tests/                # 100+ unit tests (network/subprocess/Notion API mocked)
 ```
 
 ## Test
@@ -106,6 +120,7 @@ editable install. Also runnable as a module: `python -m forge_video_summarizer �
 ## Docs
 
 - PRD: [`docs/prds/video-summarizer-v1-prd.md`](docs/prds/video-summarizer-v1-prd.md)
+- Stage 5 PRD: [`docs/PRD-stage5-notion-export.md`](docs/PRD-stage5-notion-export.md)
 - Implementation spec: [`docs/implementation.md`](docs/implementation.md)
 
 ## Scope (v1)
