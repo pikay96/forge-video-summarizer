@@ -38,23 +38,12 @@ def test_normalize_empty():
     assert normalize_page_id("") == ""
 
 
-# ── linkify_timestamps ──────────────────────────────────────────────────────
+# ── linkify_timestamps (now plain text — bilibili ignores ?t= deep links) ────
 
-def test_linkify_makes_clickable_offset():
+def test_timestamps_stay_plain_text():
     spans = linkify_timestamps("intro [01:45] then [1:02:03] end", VIDEO_URL)
-    urls = [s["text"]["link"]["url"] for s in spans if "link" in s["text"]]
-    assert f"{VIDEO_URL}/?t=105" in urls  # 1:45 -> 105s, trailing slash before query
-    assert f"{VIDEO_URL}/?t=3723" in urls  # 1:02:03 -> 3723s
-
-
-def test_linkify_appends_with_ampersand_when_query_present():
-    spans = linkify_timestamps("[00:30]", VIDEO_URL + "?p=2")
-    assert spans[0]["text"]["link"]["url"] == VIDEO_URL + "/?p=2&t=30"
-
-
-def test_linkify_keeps_single_trailing_slash():
-    spans = linkify_timestamps("[00:30]", VIDEO_URL + "/")
-    assert spans[0]["text"]["link"]["url"] == VIDEO_URL + "/?t=30"
+    assert all("link" not in s["text"] for s in spans)
+    assert "".join(s["text"]["content"] for s in spans) == "intro [01:45] then [1:02:03] end"
 
 
 def test_linkify_plain_when_no_url():
@@ -98,10 +87,11 @@ def test_quote_and_inline_code():
     assert any(s.get("annotations", {}).get("code") for s in spans)
 
 
-def test_heading_timestamp_becomes_link():
+def test_heading_timestamp_is_plain_text():
     blocks = markdown_to_blocks("### [00:00] Intro", VIDEO_URL)
     spans = blocks[0]["heading_3"]["rich_text"]
-    assert any(s["text"].get("link", {}).get("url") == f"{VIDEO_URL}/?t=0" for s in spans)
+    assert all("link" not in s["text"] for s in spans)
+    assert "".join(s["text"]["content"] for s in spans) == "[00:00] Intro"
 
 
 # ── export_summary (mocked notion-client) ───────────────────────────────────

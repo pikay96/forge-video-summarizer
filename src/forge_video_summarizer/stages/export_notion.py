@@ -31,55 +31,19 @@ __all__ = [
 
 NOTION_BLOCK_LIMIT = 100  # max blocks per children.append request
 
-# [MM:SS] or [HH:MM:SS], optionally already the section-heading leading anchor.
-_TS_RE = re.compile(r"\[(\d{1,2}):(\d{2})(?::(\d{2}))?\]")
 _FENCE_RE = re.compile(r"^```(\w*)\s*$")
 _INLINE_CODE_RE = re.compile(r"`([^`]+)`")
 
 
-def _ts_to_seconds(m: re.Match) -> int:
-    a, b, c = m.group(1), m.group(2), m.group(3)
-    if c is not None:  # HH:MM:SS
-        return int(a) * 3600 + int(b) * 60 + int(c)
-    return int(a) * 60 + int(b)  # MM:SS
+def linkify_timestamps(text: str, video_url: str = "") -> list[dict]:
+    """Return Notion rich_text spans for `text`.
 
-
-def linkify_timestamps(text: str, video_url: str) -> list[dict]:
-    """Return Notion rich_text spans, turning [MM:SS] anchors into links to
-    `<video_url>?t=<seconds>`. Without a video_url the anchors stay plain text.
+    `[MM:SS]` anchors are kept as PLAIN TEXT (not links): bilibili's web player
+    ignores `?t=<sec>` deep links on click, so a link would just land at the video
+    start and mislead. The `video_url` arg is accepted for signature stability but
+    intentionally unused.
     """
-    spans: list[dict] = []
-    pos = 0
-    for m in _TS_RE.finditer(text):
-        if m.start() > pos:
-            spans.append(_text_span(text[pos : m.start()]))
-        label = m.group(0)
-        if video_url:
-            sec = _ts_to_seconds(m)
-            spans.append(_text_span(label, link=_timed_url(video_url, sec)))
-        else:
-            spans.append(_text_span(label))
-        pos = m.end()
-    if pos < len(text):
-        spans.append(_text_span(text[pos:]))
-    return spans or [_text_span("")]
-
-
-def _timed_url(video_url: str, seconds: int) -> str:
-    """Build a bilibili deep link that actually seeks on click.
-
-    bilibili's player only honors `t=<sec>` reliably when the path has a trailing
-    slash BEFORE the query (`/video/BVxxx/?t=123`). Without it, bilibili 301-redirects
-    to the slash form and the SPA player initializes at 0 first, landing at the start.
-    So we normalize the path to end with `/` before appending the query, and merge
-    into any existing query string.
-    """
-    from urllib.parse import urlsplit, urlunsplit
-
-    parts = urlsplit(video_url)
-    path = parts.path if parts.path.endswith("/") else parts.path + "/"
-    query = f"{parts.query}&t={seconds}" if parts.query else f"t={seconds}"
-    return urlunsplit((parts.scheme, parts.netloc, path, query, parts.fragment))
+    return [_text_span(text)] if text else [_text_span("")]
 
 
 def _text_span(content: str, *, link: str | None = None, code: bool = False) -> dict:
