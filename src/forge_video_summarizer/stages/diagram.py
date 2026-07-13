@@ -42,6 +42,10 @@ log = logging.getLogger(__name__)
 
 _EXPORTER_BIN = "excalidraw-brute-export-cli"
 
+# Excalidraw font families: 1 = Virgil (hand-drawn), 2 = Helvetica (normal), 3 = Cascadia.
+# Pikay wants a normal, non hand-drawn font.
+_NORMAL_FONT_FAMILY = 2
+
 
 def _load_specialist() -> str:
     """Load the vendored excalidraw specialist prompt shipped as package data."""
@@ -70,8 +74,9 @@ Output rules:
   connected with labeled arrows. Prefer fewer, larger, well-separated elements over many
   tiny cramped ones. Leave generous gaps (>= 40px) so nothing overlaps.
 - Use the container-binding approach for labeled shapes (a shape with boundElements + a text
-  element with containerId) — never a bare "label" property. Use fontFamily:1, fontSize >= 20
-  for shape labels and titles, >= 16 for arrow labels. Use the color palette for meaning.
+  element with containerId) — never a bare "label" property. Use fontFamily:2 (a normal, NON
+  hand-drawn font) for ALL text, fontSize >= 20 for shape labels and titles, >= 16 for arrow
+  labels. Use the color palette for meaning.
 
 Below is the Excalidraw element-format specialist reference. Follow it exactly for valid JSON
 (required fields, container binding, arrow bindings, drawing order, sizing, colors).
@@ -113,12 +118,17 @@ def extract_scene(text: str) -> dict | None:
 
 
 def _normalize_scene(scene: dict) -> dict:
-    """Ensure the scene has the envelope fields the renderer expects."""
+    """Ensure the scene has the envelope fields the renderer expects, and force a normal
+    (non hand-drawn) font on every text element so the image reads cleanly."""
     scene.setdefault("type", "excalidraw")
     scene.setdefault("version", 2)
     scene.setdefault("source", "forge-video-summarizer")
     appstate = scene.setdefault("appState", {})
     appstate.setdefault("viewBackgroundColor", "#ffffff")
+    appstate.setdefault("currentItemFontFamily", _NORMAL_FONT_FAMILY)
+    for el in scene.get("elements") or []:
+        if isinstance(el, dict) and el.get("type") == "text":
+            el["fontFamily"] = _NORMAL_FONT_FAMILY  # 2 = Helvetica; never 1 (Virgil/hand-drawn)
     return scene
 
 

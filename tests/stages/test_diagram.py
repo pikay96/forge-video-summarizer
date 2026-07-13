@@ -74,6 +74,32 @@ def test_render_success_writes_scene_and_checks_png(monkeypatch, tmp_path):
     assert written["type"] == "excalidraw" and written["appState"]["viewBackgroundColor"]
 
 
+def test_render_forces_normal_font(monkeypatch, tmp_path):
+    # A hand-drawn (fontFamily:1) text element must be rewritten to the normal font (2).
+    out = tmp_path / "o.png"
+    scene = {
+        "type": "excalidraw", "version": 2,
+        "elements": [
+            {"type": "rectangle", "id": "r1", "x": 0, "y": 0, "width": 200, "height": 80},
+            {"type": "text", "id": "t1", "x": 5, "y": 5, "text": "hi", "fontFamily": 1,
+             "containerId": "r1"},
+        ],
+    }
+
+    def fake_run(cmd, capture_output, text, timeout):
+        o = cmd[cmd.index("-o") + 1]
+        with open(o, "wb") as fh:
+            fh.write(b"\x89PNG")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("forge_video_summarizer.stages.diagram.subprocess.run", fake_run)
+    ok, _ = render_excalidraw(scene, out, exporter="/fake/cli")
+    assert ok is True
+    written = json.loads(out.with_suffix(".excalidraw").read_text())
+    text_el = next(e for e in written["elements"] if e["type"] == "text")
+    assert text_el["fontFamily"] == 2  # forced off hand-drawn (1)
+
+
 def test_render_failure_reports_error(monkeypatch, tmp_path):
     def fake_run(cmd, capture_output, text, timeout):
         return SimpleNamespace(returncode=1, stdout="", stderr="error: bad scene")
