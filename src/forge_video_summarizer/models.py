@@ -42,7 +42,7 @@ class VideoMetadata:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "VideoMetadata":
+    def from_dict(cls, data: dict[str, Any]) -> VideoMetadata:
         known = {f.name for f in fields(cls)}
         return cls(**{k: v for k, v in data.items() if k in known})
 
@@ -108,7 +108,7 @@ class Transcript:
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "Transcript":
+    def from_dict(cls, data: dict[str, Any]) -> Transcript:
         return cls(
             segments=[TranscriptSegment(**s) for s in data.get("segments", [])],
             locale=data.get("locale", ""),

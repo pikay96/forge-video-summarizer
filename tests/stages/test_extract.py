@@ -8,6 +8,8 @@ import pytest
 from forge_video_summarizer.errors import ExtractionError
 from forge_video_summarizer.stages.extract import extract_audio, probe_duration
 
+_MOD = "forge_video_summarizer.stages.extract"
+
 
 def test_extract_missing_video(tmp_path):
     with pytest.raises(ExtractionError, match="not found"):
@@ -19,7 +21,7 @@ def test_extract_cache_hit(tmp_path):
     video.write_text("v")
     audio = tmp_path / "audio.mp3"
     audio.write_text("cached")
-    with patch("forge_video_summarizer.stages.extract.subprocess.run") as run:
+    with patch(f"{_MOD}.subprocess.run") as run:
         result = extract_audio(video, audio, force=False)
     run.assert_not_called()
     assert result == audio
@@ -66,9 +68,8 @@ def test_extract_ffmpeg_failure(tmp_path):
     with patch(
         "forge_video_summarizer.stages.extract.subprocess.run",
         side_effect=subprocess.CalledProcessError(1, "ffmpeg"),
-    ):
-        with pytest.raises(ExtractionError):
-            extract_audio(video, tmp_path / "audio.mp3")
+    ), pytest.raises(ExtractionError):
+        extract_audio(video, tmp_path / "audio.mp3")
 
 
 def test_extract_ffmpeg_permission_error(tmp_path):
@@ -78,22 +79,25 @@ def test_extract_ffmpeg_permission_error(tmp_path):
     with patch(
         "forge_video_summarizer.stages.extract.subprocess.run",
         side_effect=PermissionError(13, "Permission denied"),
-    ):
-        with pytest.raises(ExtractionError, match="failed"):
-            extract_audio(video, tmp_path / "audio.mp3")
+    ), pytest.raises(ExtractionError, match="failed"):
+        extract_audio(video, tmp_path / "audio.mp3")
 
 
 def test_extract_missing_output(tmp_path):
     video = tmp_path / "video.mp4"
     video.write_text("v")
-    with patch("forge_video_summarizer.stages.extract.subprocess.run", return_value=MagicMock()):
-        with pytest.raises(ExtractionError, match="no output"):
-            extract_audio(video, tmp_path / "audio.mp3")
+    with (
+        patch(f"{_MOD}.subprocess.run", return_value=MagicMock()),
+        pytest.raises(ExtractionError, match="no output"),
+    ):
+        extract_audio(video, tmp_path / "audio.mp3")
 
 
 def test_probe_duration_parses():
-    with patch("forge_video_summarizer.stages.extract.shutil.which", return_value="/usr/bin/ffprobe"), \
-         patch("forge_video_summarizer.stages.extract.subprocess.run") as run:
+    with (
+        patch(f"{_MOD}.shutil.which", return_value="/usr/bin/ffprobe"),
+        patch(f"{_MOD}.subprocess.run") as run,
+    ):
         run.return_value = MagicMock(stdout="123.45\n")
         assert probe_duration("x.mp3") == 123.45
 
@@ -104,7 +108,9 @@ def test_probe_duration_no_ffprobe():
 
 
 def test_probe_duration_bad_output():
-    with patch("forge_video_summarizer.stages.extract.shutil.which", return_value="/usr/bin/ffprobe"), \
-         patch("forge_video_summarizer.stages.extract.subprocess.run") as run:
+    with (
+        patch(f"{_MOD}.shutil.which", return_value="/usr/bin/ffprobe"),
+        patch(f"{_MOD}.subprocess.run") as run,
+    ):
         run.return_value = MagicMock(stdout="N/A\n")
         assert probe_duration("x.mp3") is None

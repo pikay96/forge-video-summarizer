@@ -1,4 +1,4 @@
-"""Command-line interface: end-to-end `summarize` + four per-stage subcommands."""
+"""Command-line interface: end-to-end `summarize` + five per-stage subcommands."""
 
 from __future__ import annotations
 

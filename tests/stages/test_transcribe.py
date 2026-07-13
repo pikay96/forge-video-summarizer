@@ -48,7 +48,9 @@ def test_parse_response_interpolates_single_phrase():
 def test_parse_response_single_sentence_not_approximate():
     payload = {
         "durationMilliseconds": 5000,
-        "phrases": [{"offsetMilliseconds": 0, "durationMilliseconds": 5000, "text": "整段没有句号"}],
+        "phrases": [
+            {"offsetMilliseconds": 0, "durationMilliseconds": 5000, "text": "整段没有句号"}
+        ],
     }
     t = parse_response(payload)
     assert len(t.segments) == 1
@@ -140,9 +142,11 @@ def test_transcribe_network_error(config, tmp_path):
 def test_transcribe_rejects_oversized_file(config, tmp_path):
     audio = tmp_path / "audio.wav"
     audio.write_bytes(b"0123456789")
-    with patch("forge_video_summarizer.stages.transcribe.MAX_AUDIO_BYTES", 5):
-        with pytest.raises(AudioTooLongError, match="MB"):
-            transcribe_audio(audio, config)
+    with (
+        patch("forge_video_summarizer.stages.transcribe.MAX_AUDIO_BYTES", 5),
+        pytest.raises(AudioTooLongError, match="MB"),
+    ):
+        transcribe_audio(audio, config)
 
 
 def test_transcribe_rejects_overlong_duration(config, tmp_path):

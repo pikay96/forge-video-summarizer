@@ -10,6 +10,7 @@ from .errors import (
     AudioTooLongError,
     ConfigError,
     DownloadError,
+    ExportError,
     ExtractionError,
     ForgeError,
     SummarizationError,
@@ -38,6 +39,7 @@ __all__ = [
     "TranscriptionError",
     "AudioTooLongError",
     "SummarizationError",
+    "ExportError",
 ]
 
 __version__ = "1.0.0"

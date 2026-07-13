@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "forge-video-summarizer"
 version = "1.0.0"
-description = "Local-capable video-to-summary pipeline: download -> extract -> transcribe -> summarize"
+description = "Local-capable video-to-summary pipeline: download -> extract -> transcribe -> summarize -> export"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
@@ -36,3 +36,10 @@ addopts = "-q"
 [tool.ruff]
 line-length = 100
 src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["F", "E", "W", "I", "UP", "B", "SIM", "RET", "C4", "PIE"]
+ignore = ["B008"]  # allow function calls in argument defaults where intentional
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["ARG"]  # pytest fixtures often appear as unused arguments

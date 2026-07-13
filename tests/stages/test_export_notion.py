@@ -10,7 +10,6 @@ from forge_video_summarizer.models import VideoMetadata
 from forge_video_summarizer.stages.export_notion import (
     NOTION_BLOCK_LIMIT,
     export_summary,
-    linkify_timestamps,
     markdown_to_blocks,
 )
 
@@ -38,17 +37,13 @@ def test_normalize_empty():
     assert normalize_page_id("") == ""
 
 
-# ── linkify_timestamps (now plain text — bilibili ignores ?t= deep links) ────
+# ── timestamps stay plain text (bilibili ignores ?t= deep links) ─────────────
 
 def test_timestamps_stay_plain_text():
-    spans = linkify_timestamps("intro [01:45] then [1:02:03] end", VIDEO_URL)
+    blocks = markdown_to_blocks("intro [01:45] then [1:02:03] end")
+    spans = blocks[0]["paragraph"]["rich_text"]
     assert all("link" not in s["text"] for s in spans)
     assert "".join(s["text"]["content"] for s in spans) == "intro [01:45] then [1:02:03] end"
-
-
-def test_linkify_plain_when_no_url():
-    spans = linkify_timestamps("[00:30] hi", "")
-    assert all("link" not in s["text"] for s in spans)
 
 
 # ── markdown_to_blocks ──────────────────────────────────────────────────────
@@ -88,7 +83,7 @@ def test_quote_and_inline_code():
 
 
 def test_heading_timestamp_is_plain_text():
-    blocks = markdown_to_blocks("### [00:00] Intro", VIDEO_URL)
+    blocks = markdown_to_blocks("### [00:00] Intro")
     spans = blocks[0]["heading_3"]["rich_text"]
     assert all("link" not in s["text"] for s in spans)
     assert "".join(s["text"]["content"] for s in spans) == "[00:00] Intro"

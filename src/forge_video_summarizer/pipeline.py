@@ -29,7 +29,7 @@ _LOCAL_VIDEO_EXTS = {".mp4", ".mkv", ".webm", ".mov", ".avi", ".flv", ".m4v", ".
 
 
 def _looks_like_url(value: str) -> bool:
-    return value.startswith("http://") or value.startswith("https://")
+    return value.startswith(("http://", "https://"))
 
 
 class Pipeline:

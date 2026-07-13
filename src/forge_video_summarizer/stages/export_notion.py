@@ -5,16 +5,18 @@ contains: an embedded bilibili video, a metadata callout, and the summary body
 rendered as native Notion blocks. Audio and transcript are intentionally excluded.
 
 Idempotency: we dedup by the video id embedded in the subpage title, so re-exporting
-the same video archives the old subpage's content and rewrites it rather than
-piling up duplicates.
+the same video archives the old subpage wholesale (one call) and creates a fresh one
+rather than piling up duplicates.
 
 Markdown -> blocks covers the shapes Stage 4 emits: H1/H2/H3, paragraphs, bulleted
 and numbered lists, fenced code, and blockquotes. Inline `[MM:SS]` / `[HH:MM:SS]`
-anchors become clickable links into the bilibili video at that offset (`?t=<sec>`).
+anchors are kept as plain text — bilibili's web player ignores `?t=<sec>` deep links
+on click, so a hyperlink would just land at the start and mislead.
 """
 
 from __future__ import annotations
 
+import contextlib
 import re
 from typing import Any
 
@@ -25,7 +27,6 @@ from ..models import VideoMetadata
 __all__ = [
     "export_summary",
     "markdown_to_blocks",
-    "linkify_timestamps",
     "NOTION_BLOCK_LIMIT",
 ]
 
@@ -35,62 +36,49 @@ _FENCE_RE = re.compile(r"^```(\w*)\s*$")
 _INLINE_CODE_RE = re.compile(r"`([^`]+)`")
 
 
-def linkify_timestamps(text: str, video_url: str = "") -> list[dict]:
-    """Return Notion rich_text spans for `text`.
-
-    `[MM:SS]` anchors are kept as PLAIN TEXT (not links): bilibili's web player
-    ignores `?t=<sec>` deep links on click, so a link would just land at the video
-    start and mislead. The `video_url` arg is accepted for signature stability but
-    intentionally unused.
-    """
-    return [_text_span(text)] if text else [_text_span("")]
-
-
-def _text_span(content: str, *, link: str | None = None, code: bool = False) -> dict:
+def _text_span(content: str, *, code: bool = False) -> dict:
     span: dict[str, Any] = {"type": "text", "text": {"content": content}}
-    if link:
-        span["text"]["link"] = {"url": link}
     if code:
         span["annotations"] = {"code": True}
     return span
 
 
-def _rich_text(text: str, video_url: str) -> list[dict]:
-    """Build rich_text spans with inline-code (`x`) and timestamp links honored."""
+def _rich_text(text: str) -> list[dict]:
+    """Build rich_text spans, honoring inline code (`x`). `[MM:SS]` anchors stay
+    plain text (bilibili ignores ?t= deep links)."""
     spans: list[dict] = []
     pos = 0
     for m in _INLINE_CODE_RE.finditer(text):
         if m.start() > pos:
-            spans.extend(linkify_timestamps(text[pos : m.start()], video_url))
+            spans.append(_text_span(text[pos : m.start()]))
         spans.append(_text_span(m.group(1), code=True))
         pos = m.end()
     if pos < len(text):
-        spans.extend(linkify_timestamps(text[pos:], video_url))
+        spans.append(_text_span(text[pos:]))
     return spans or [_text_span("")]
 
 
-def _para(text: str, video_url: str) -> dict:
-    return {"type": "paragraph", "paragraph": {"rich_text": _rich_text(text, video_url)}}
+def _para(text: str) -> dict:
+    return {"type": "paragraph", "paragraph": {"rich_text": _rich_text(text)}}
 
 
-def _heading(level: int, text: str, video_url: str) -> dict:
+def _heading(level: int, text: str) -> dict:
     key = f"heading_{min(level, 3)}"
-    return {"type": key, key: {"rich_text": _rich_text(text, video_url)}}
+    return {"type": key, key: {"rich_text": _rich_text(text)}}
 
 
-def _list_item(kind: str, text: str, video_url: str) -> dict:
+def _list_item(kind: str, text: str) -> dict:
     key = "bulleted_list_item" if kind == "ul" else "numbered_list_item"
-    return {"type": key, key: {"rich_text": _rich_text(text, video_url)}}
+    return {"type": key, key: {"rich_text": _rich_text(text)}}
 
 
-def markdown_to_blocks(markdown: str, video_url: str = "") -> list[dict]:
+def markdown_to_blocks(markdown: str) -> list[dict]:
     """Convert Stage-4 markdown into a list of Notion block objects."""
     blocks: list[dict] = []
     lines = markdown.splitlines()
     i = 0
     while i < len(lines):
-        line = lines[i]
-        stripped = line.strip()
+        stripped = lines[i].strip()
 
         fence = _FENCE_RE.match(stripped)
         if fence:
@@ -116,18 +104,18 @@ def markdown_to_blocks(markdown: str, video_url: str = "") -> list[dict]:
 
         if stripped.startswith("#"):
             hashes = len(stripped) - len(stripped.lstrip("#"))
-            blocks.append(_heading(hashes, stripped[hashes:].strip(), video_url))
+            blocks.append(_heading(hashes, stripped[hashes:].strip()))
         elif stripped.startswith(("- ", "* ", "+ ")):
-            blocks.append(_list_item("ul", stripped[2:].strip(), video_url))
+            blocks.append(_list_item("ul", stripped[2:].strip()))
         elif re.match(r"^\d+\.\s", stripped):
-            blocks.append(_list_item("ol", re.sub(r"^\d+\.\s", "", stripped), video_url))
+            blocks.append(_list_item("ol", re.sub(r"^\d+\.\s", "", stripped)))
         elif stripped.startswith(">"):
             blocks.append({
                 "type": "quote",
-                "quote": {"rich_text": _rich_text(stripped[1:].strip(), video_url)},
+                "quote": {"rich_text": _rich_text(stripped[1:].strip())},
             })
         else:
-            blocks.append(_para(stripped, video_url))
+            blocks.append(_para(stripped))
         i += 1
     return blocks
 
@@ -205,10 +193,8 @@ def _find_existing(client: Any, parent_id: str, marker_title: str) -> str | None
 def _archive_page(client: Any, page_id: str) -> None:
     """Archive (soft-delete) an entire subpage in ONE call. Far cheaper than
     deleting child blocks individually, and avoids rate-limit storms on long pages."""
-    try:
+    with contextlib.suppress(Exception):  # best-effort; a fresh page is still created
         client.pages.update(page_id=page_id, archived=True)
-    except Exception:  # noqa: BLE001 - best-effort; a fresh page is still created
-        pass
 
 
 def export_summary(
@@ -235,9 +221,7 @@ def export_summary(
     raw_title = metadata.title if metadata else "Video Summary"
     marker_title = _title_with_id(raw_title, video_id)
 
-    all_blocks = _header_blocks(metadata, video_url) + markdown_to_blocks(
-        summary_markdown, video_url
-    )
+    all_blocks = _header_blocks(metadata, video_url) + markdown_to_blocks(summary_markdown)
     first, rest = all_blocks[:NOTION_BLOCK_LIMIT], all_blocks[NOTION_BLOCK_LIMIT:]
 
     try:

@@ -75,6 +75,36 @@ def test_summarize_transcript_command(tmp_path):
     inst.run_summarize.assert_called_once()
 
 
+def test_export_command(tmp_path):
+    with (
+        patch("forge_video_summarizer.cli.load_config"),
+        patch("forge_video_summarizer.cli.Pipeline") as P,
+    ):
+        inst = P.return_value
+        inst.workspace_for_local.return_value = MagicMock()
+        inst.run_export.return_value = "https://www.notion.so/abc"
+        rc = main(["export", "/home/me/clip.mp4"])
+    assert rc == 0
+    inst.run_export.assert_called_once()
+
+
+def test_summarize_with_export_flag(tmp_path, capsys):
+    with (
+        patch("forge_video_summarizer.cli.load_config"),
+        patch("forge_video_summarizer.cli.Pipeline") as P,
+    ):
+        inst = P.return_value
+        inst.run_all.return_value = tmp_path / "summary.md"
+        ws = MagicMock()
+        ws.notion_url_path.read_text.return_value = "https://www.notion.so/xyz\n"
+        inst.workspace_for_local.return_value = ws
+        rc = main(["summarize", "/home/me/clip.mp4", "--export"])
+    assert rc == 0
+    # run_all invoked with export=True; page url printed
+    assert inst.run_all.call_args.kwargs["export"] is True
+    assert "notion.so/xyz" in capsys.readouterr().out
+
+
 def test_error_returns_exit_code_1(capsys):
     with patch("forge_video_summarizer.cli.load_config"), \
          patch("forge_video_summarizer.cli.Pipeline") as P:
@@ -88,7 +118,9 @@ def test_error_returns_exit_code_1(capsys):
 def test_module_entrypoint_runs():
     import runpy
 
-    with patch("forge_video_summarizer.cli.main", return_value=0):
-        with pytest.raises(SystemExit) as exc:
-            runpy.run_module("forge_video_summarizer", run_name="__main__")
+    with (
+        patch("forge_video_summarizer.cli.main", return_value=0),
+        pytest.raises(SystemExit) as exc,
+    ):
+        runpy.run_module("forge_video_summarizer", run_name="__main__")
     assert exc.value.code == 0

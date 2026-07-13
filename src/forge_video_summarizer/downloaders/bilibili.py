@@ -21,7 +21,7 @@ import requests
 
 from ..errors import DownloadError
 from ..models import VideoMetadata
-from .base import DownloadResult, Downloader
+from .base import Downloader, DownloadResult
 
 __all__ = ["BilibiliDownloader", "normalize_bvid"]
 

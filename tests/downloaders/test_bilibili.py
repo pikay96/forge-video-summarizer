@@ -237,9 +237,8 @@ def test_merge_ffmpeg_error(tmp_path):
     with patch(
         "forge_video_summarizer.downloaders.bilibili.subprocess.run",
         side_effect=subprocess.CalledProcessError(1, "ffmpeg"),
-    ):
-        with pytest.raises(DownloadError, match="merge failed"):
-            dl.download("https://www.bilibili.com/video/BV1", tmp_path)
+    ), pytest.raises(DownloadError, match="merge failed"):
+        dl.download("https://www.bilibili.com/video/BV1", tmp_path)
 
 
 def test_make_session_sets_cookie():

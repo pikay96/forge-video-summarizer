@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from ..config import Config
 from ..errors import UnsupportedURLError
-from .base import DownloadResult, Downloader
+from .base import Downloader, DownloadResult
 from .bilibili import BilibiliDownloader, normalize_bvid
 
 __all__ = [

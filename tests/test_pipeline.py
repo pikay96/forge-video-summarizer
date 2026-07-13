@@ -97,7 +97,9 @@ def test_run_transcribe_cache_hit(config, tmp_path):
     # Cache holds the RAW Azure fast-transcription response (source of truth).
     raw = {
         "combinedPhrases": [{"text": "hi"}],
-        "phrases": [{"offsetMilliseconds": 0, "durationMilliseconds": 1000, "locale": "zh-CN", "text": "hi"}],
+        "phrases": [
+            {"offsetMilliseconds": 0, "durationMilliseconds": 1000, "locale": "zh-CN", "text": "hi"}
+        ],
     }
     ws.transcript_json_path.write_text(json.dumps(raw))
 
@@ -159,7 +161,9 @@ def test_run_summarize_writes(config, tmp_path):
     ws.ensure()
     t_raw = {
         "combinedPhrases": [{"text": "hi"}],
-        "phrases": [{"offsetMilliseconds": 0, "durationMilliseconds": 1000, "locale": "zh-CN", "text": "hi"}],
+        "phrases": [
+            {"offsetMilliseconds": 0, "durationMilliseconds": 1000, "locale": "zh-CN", "text": "hi"}
+        ],
     }
     ws.transcript_json_path.write_text(json.dumps(t_raw))
     ws.metadata_path.write_text(json.dumps(VideoMetadata(video_id="BV1", title="T").to_dict()))
