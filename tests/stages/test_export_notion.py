@@ -89,6 +89,14 @@ def test_heading_timestamp_is_plain_text():
     assert "".join(s["text"]["content"] for s in spans) == "[00:00] Intro"
 
 
+def test_mermaid_code_block_maps_to_mermaid_language():
+    md = "```mermaid\nflowchart TD\n    A --> B\n```"
+    blocks = markdown_to_blocks(md)
+    assert blocks[0]["type"] == "code"
+    assert blocks[0]["code"]["language"] == "mermaid"  # renders as a diagram in Notion
+    assert "flowchart TD" in blocks[0]["code"]["rich_text"][0]["text"]["content"]
+
+
 # ── export_summary (mocked notion-client) ───────────────────────────────────
 
 def _fake_client(existing_children=None):

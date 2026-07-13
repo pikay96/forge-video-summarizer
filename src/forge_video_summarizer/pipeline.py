@@ -7,6 +7,7 @@ rule via the Workspace. `run_all` executes the full end-to-end pipeline.
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 
 from .config import Config
@@ -16,6 +17,8 @@ from .models import Transcript, VideoMetadata
 from .stages import (
     export_summary,
     extract_audio,
+    generate_overview_diagram,
+    prepend_overview,
     probe_duration,
     summarize_transcript,
     transcribe_audio,
@@ -24,6 +27,8 @@ from .stages.transcribe import parse_response
 from .workspace import Workspace
 
 __all__ = ["Pipeline"]
+
+log = logging.getLogger(__name__)
 
 _LOCAL_VIDEO_EXTS = {".mp4", ".mkv", ".webm", ".mov", ".avi", ".flv", ".m4v", ".ts"}
 
@@ -114,6 +119,17 @@ class Pipeline:
         )
         metadata = self._read_metadata(ws)
         summary = summarize_transcript(transcript, self.config, metadata=metadata)
+
+        # Overview diagram (always-on): a dedicated second pass turns the finished
+        # summary into one Mermaid overview, prepended as an `## Overview` section.
+        # Best-effort — a failed/invalid diagram must never block the summary.
+        try:
+            mermaid = generate_overview_diagram(summary, self.config)
+            if mermaid:
+                summary = prepend_overview(summary, mermaid)
+        except Exception as exc:  # noqa: BLE001 - diagram is additive, degrade gracefully
+            log.warning("overview diagram step failed, shipping summary without it: %s", exc)
+
         ws.summary_path.write_text(summary, "utf-8")
         return ws.summary_path
 

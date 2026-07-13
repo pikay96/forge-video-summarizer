@@ -168,11 +168,56 @@ def test_run_summarize_writes(config, tmp_path):
     ws.transcript_json_path.write_text(json.dumps(t_raw))
     ws.metadata_path.write_text(json.dumps(VideoMetadata(video_id="BV1", title="T").to_dict()))
 
-    with patch("forge_video_summarizer.pipeline.summarize_transcript", return_value="# S") as sm:
+    with patch("forge_video_summarizer.pipeline.summarize_transcript", return_value="# S") as sm, \
+         patch("forge_video_summarizer.pipeline.generate_overview_diagram", return_value=None):
         out = pipe.run_summarize(ws)
     assert out.read_text() == "# S"
     # metadata was passed through
     assert sm.call_args.kwargs["metadata"].title == "T"
+
+
+def test_run_summarize_prepends_overview_diagram(config, tmp_path):
+    pipe = Pipeline(config, output_root=tmp_path)
+    ws = Workspace(tmp_path, "T", "BV1")
+    ws.ensure()
+    t_raw = {
+        "combinedPhrases": [{"text": "hi"}],
+        "phrases": [
+            {"offsetMilliseconds": 0, "durationMilliseconds": 1000, "locale": "zh-CN", "text": "hi"}
+        ],
+    }
+    ws.transcript_json_path.write_text(json.dumps(t_raw))
+    ws.metadata_path.write_text(json.dumps(VideoMetadata(video_id="BV1", title="T").to_dict()))
+    mermaid = "flowchart TD\n  A --> B"
+    with patch("forge_video_summarizer.pipeline.summarize_transcript",
+               return_value="# S\n\nbody"), \
+         patch("forge_video_summarizer.pipeline.generate_overview_diagram",
+               return_value=mermaid):
+        out = pipe.run_summarize(ws)
+    text = out.read_text()
+    assert text.startswith("## Overview")
+    assert "```mermaid" in text and mermaid in text
+    assert text.rstrip().endswith("body")
+
+
+def test_run_summarize_degrades_when_diagram_raises(config, tmp_path):
+    pipe = Pipeline(config, output_root=tmp_path)
+    ws = Workspace(tmp_path, "T", "BV1")
+    ws.ensure()
+    t_raw = {
+        "combinedPhrases": [{"text": "hi"}],
+        "phrases": [
+            {"offsetMilliseconds": 0, "durationMilliseconds": 1000, "locale": "zh-CN", "text": "hi"}
+        ],
+    }
+    ws.transcript_json_path.write_text(json.dumps(t_raw))
+    ws.metadata_path.write_text(json.dumps(VideoMetadata(video_id="BV1", title="T").to_dict()))
+    with patch("forge_video_summarizer.pipeline.summarize_transcript", return_value="# S"), \
+         patch("forge_video_summarizer.pipeline.generate_overview_diagram",
+               side_effect=RuntimeError("boom")):
+        out = pipe.run_summarize(ws)
+    # summary still ships, without the diagram
+    assert out.read_text() == "# S"
 
 
 def test_run_all_local_end_to_end(config, tmp_path):
@@ -184,7 +229,8 @@ def test_run_all_local_end_to_end(config, tmp_path):
     with patch("forge_video_summarizer.pipeline.probe_duration", return_value=10.0), \
          patch("forge_video_summarizer.pipeline.extract_audio") as ex, \
          patch("forge_video_summarizer.pipeline.transcribe_audio", return_value=t), \
-         patch("forge_video_summarizer.pipeline.summarize_transcript", return_value="# Final"):
+         patch("forge_video_summarizer.pipeline.summarize_transcript", return_value="# Final"), \
+         patch("forge_video_summarizer.pipeline.generate_overview_diagram", return_value=None):
         ex.side_effect = lambda video, out, force=False: (out.write_bytes(b"a") or out)
         result = pipe.run_all(str(local))
 

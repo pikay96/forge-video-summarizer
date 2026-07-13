@@ -123,6 +123,7 @@ def markdown_to_blocks(markdown: str) -> list[dict]:
 _NOTION_LANGS = {
     "py": "python", "python": "python", "js": "javascript", "ts": "typescript",
     "json": "json", "bash": "bash", "sh": "shell", "shell": "shell", "text": "plain text",
+    "mermaid": "mermaid",
 }
 
 

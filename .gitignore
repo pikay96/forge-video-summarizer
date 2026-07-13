@@ -33,3 +33,6 @@ summary.md
 output/
 downloads/
 models/
+
+# Node (mermaid-cli for diagram validation)
+node_modules/

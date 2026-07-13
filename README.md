@@ -32,6 +32,18 @@ works: download from https://johnvansickle.com/ffmpeg/, then drop `ffmpeg`/`ffpr
 into `~/.local/bin`. (A Windows `ffmpeg.exe` reached via `/mnt/c` PATH can raise
 `PermissionError` under WSL — prefer a native Linux binary.)
 
+**Optional — Mermaid validation for the overview diagram.** Each summary opens with an
+auto-generated Mermaid overview diagram (see [Overview diagram](#overview-diagram)). To
+strictly validate that diagram renders before embedding it, install the Node-based
+mermaid-cli once:
+
+```bash
+npm install        # installs @mermaid-js/mermaid-cli (mmdc) into node_modules/
+```
+
+If `mmdc` is absent the pipeline still runs — it simply skips strict validation and embeds
+the diagram as-is (it still renders in Notion when well-formed).
+
 ## Configure
 
 Copy `.env.example` to `.env` and set:
@@ -80,13 +92,31 @@ Flags: `--output <dir>` (default `output/`), `--force` (ignore cache), `--env <p
    interpolated (approximate — transcript.txt says so); transcript.json keeps the raw
    response as source of truth.
 4. **Summarize** — Azure OpenAI Responses API. Teacher-clear + interview-ready markdown,
-   length scales with duration, one `[MM:SS]` anchor per meaningful topic shift.
+   length scales with duration, one `[MM:SS]` anchor per meaningful topic shift. Then a
+   **dedicated second pass** generates a Mermaid **overview diagram** from the finished
+   summary and prepends it as an `## Overview` section (see below).
 5. **Export** — publishes `summary.md` to Notion as a **subpage** of a configured parent
    page (official `notion-client` SDK). Each page carries an embedded bilibili video, a
-   metadata callout, and the summary as native blocks; `[MM:SS]` anchors become clickable
-   `?t=<sec>` links into the video. Idempotent (dedups by video-id marker in the title,
-   updates in place) and chunks block appends at Notion's 100-per-request limit. Audio and
-   transcript are intentionally excluded.
+   metadata callout, and the summary as native blocks (including the Mermaid overview,
+   which Notion renders as a diagram); `[MM:SS]` anchors are plain text (bilibili's web
+   player ignores `?t=` deep links). Idempotent (dedups by video-id marker in the title,
+   archives + recreates) and chunks block appends at Notion's 100-per-request limit. Audio
+   and transcript are intentionally excluded.
+
+## Overview diagram
+
+Every summary opens with an auto-generated **Mermaid overview diagram** — an at-a-glance map
+of the video's key concepts and how they relate. It's generated in a **dedicated second
+model pass** (after the prose summary) so the model gives the diagram undivided attention and
+works from the already-distilled summary. The model **chooses the diagram type** (flowchart,
+mind-map, sequence, etc.) to fit the content, and labels are in the summary's dominant
+language.
+
+Mermaid is used deliberately over image generation: it produces **faithful, correct labels
+and real relationships** (a concept map), not a plausible-but-garbled picture. The generated
+diagram is **strictly validated** by rendering it with `mmdc` (mermaid-cli); on failure it
+regenerates once (feeding the parser error back), then degrades gracefully — the summary
+always ships. Notion renders the ` ```mermaid ` block as a real diagram.
 
 ## Layout
 
@@ -99,8 +129,9 @@ src/forge_video_summarizer/
 ├── models.py         # VideoMetadata, Transcript, TranscriptSegment
 ├── errors.py         # typed exceptions
 ├── downloaders/      # pluggable per-site (base + bilibili + registry)
-└── stages/           # extract, transcribe, summarize, export_notion
-tests/                # 100+ unit tests (network/subprocess/Notion API mocked)
+├── prompts/          # vendored mermaid-diagram-specialist instruction (package data)
+└── stages/           # extract, transcribe, summarize, diagram, export_notion
+tests/                # unit tests (network/subprocess/Notion API/mmdc mocked)
 ```
 
 ## Test

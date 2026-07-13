@@ -1,0 +1,10 @@
+{
+  "name": "forge-video-summarizer-tools",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Node tooling for forge-video-summarizer: mermaid-cli (mmdc) for strict validation of model-generated Mermaid overview diagrams. Install with `npm install`.",
+  "license": "MIT",
+  "devDependencies": {
+    "@mermaid-js/mermaid-cli": "^11.16.0"
+  }
+}
