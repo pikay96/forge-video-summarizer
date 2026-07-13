@@ -14,6 +14,7 @@ from typing import Any
 from ..config import Config
 from ..errors import SummarizationError
 from ..models import Transcript, VideoMetadata
+from ._openai import call_responses, make_client
 
 __all__ = ["summarize_transcript", "build_prompt", "SYSTEM_INSTRUCTIONS"]
 
@@ -60,36 +61,6 @@ def build_prompt(transcript: Transcript, metadata: VideoMetadata | None) -> str:
     return "\n".join(parts)
 
 
-def _extract_output_text(response: Any) -> str:
-    """Pull text out of a Responses API result across SDK shapes."""
-    text = getattr(response, "output_text", None)
-    if text:
-        return text.strip()
-
-    chunks: list[str] = []
-    for item in getattr(response, "output", []) or []:
-        content = getattr(item, "content", None)
-        if content is None and isinstance(item, dict):
-            content = item.get("content")
-        for block in content or []:
-            block_text = getattr(block, "text", None)
-            if block_text is None and isinstance(block, dict):
-                block_text = block.get("text")
-            if block_text:
-                chunks.append(block_text)
-    if chunks:
-        return "".join(chunks).strip()
-    raise SummarizationError("Could not extract text from the model response")
-
-
-def _make_client(config: Config):
-    try:
-        from openai import OpenAI
-    except ImportError as exc:  # pragma: no cover - dependency guard
-        raise SummarizationError("The 'openai' package is required for summarization") from exc
-    return OpenAI(base_url=config.openai_endpoint, api_key=config.openai_key)
-
-
 def summarize_transcript(
     transcript: Transcript,
     config: Config,
@@ -102,16 +73,9 @@ def summarize_transcript(
     if not transcript.segments:
         raise SummarizationError("Transcript is empty; nothing to summarize")
 
-    client = client or _make_client(config)
+    client = client or make_client(config)
     prompt = build_prompt(transcript, metadata)
-
-    try:
-        response = client.responses.create(
-            model=config.openai_deployment,
-            instructions=SYSTEM_INSTRUCTIONS,
-            input=prompt,
-        )
-    except Exception as exc:  # noqa: BLE001 - surface any SDK/transport error uniformly
-        raise SummarizationError(f"summarization request failed: {exc}") from exc
-
-    return _extract_output_text(response)
+    summary = call_responses(client, config, SYSTEM_INSTRUCTIONS, prompt)
+    if not summary:
+        raise SummarizationError("Could not extract text from the model response")
+    return summary

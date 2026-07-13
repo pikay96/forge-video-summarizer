@@ -155,19 +155,23 @@ def test_run_summarize_cache_hit(config, tmp_path):
     assert out.read_text() == "cached summary"
 
 
-def test_run_summarize_writes(config, tmp_path):
-    pipe = Pipeline(config, output_root=tmp_path)
+def _seed_summarize_ws(tmp_path):
+    """Workspace with a cached transcript.json + metadata, ready for run_summarize."""
     ws = Workspace(tmp_path, "T", "BV1")
     ws.ensure()
-    t_raw = {
+    ws.transcript_json_path.write_text(json.dumps({
         "combinedPhrases": [{"text": "hi"}],
         "phrases": [
             {"offsetMilliseconds": 0, "durationMilliseconds": 1000, "locale": "zh-CN", "text": "hi"}
         ],
-    }
-    ws.transcript_json_path.write_text(json.dumps(t_raw))
+    }))
     ws.metadata_path.write_text(json.dumps(VideoMetadata(video_id="BV1", title="T").to_dict()))
+    return ws
 
+
+def test_run_summarize_writes(config, tmp_path):
+    pipe = Pipeline(config, output_root=tmp_path)
+    ws = _seed_summarize_ws(tmp_path)
     with patch("forge_video_summarizer.pipeline.summarize_transcript", return_value="# S") as sm, \
          patch("forge_video_summarizer.pipeline.generate_overview_image", return_value=None):
         out = pipe.run_summarize(ws)
@@ -178,16 +182,7 @@ def test_run_summarize_writes(config, tmp_path):
 
 def test_run_summarize_generates_overview_image(config, tmp_path):
     pipe = Pipeline(config, output_root=tmp_path)
-    ws = Workspace(tmp_path, "T", "BV1")
-    ws.ensure()
-    t_raw = {
-        "combinedPhrases": [{"text": "hi"}],
-        "phrases": [
-            {"offsetMilliseconds": 0, "durationMilliseconds": 1000, "locale": "zh-CN", "text": "hi"}
-        ],
-    }
-    ws.transcript_json_path.write_text(json.dumps(t_raw))
-    ws.metadata_path.write_text(json.dumps(VideoMetadata(video_id="BV1", title="T").to_dict()))
+    ws = _seed_summarize_ws(tmp_path)
     with patch("forge_video_summarizer.pipeline.summarize_transcript", return_value="# S"), \
          patch("forge_video_summarizer.pipeline.generate_overview_image") as gi:
         out = pipe.run_summarize(ws)
@@ -198,16 +193,7 @@ def test_run_summarize_generates_overview_image(config, tmp_path):
 
 def test_run_summarize_degrades_when_overview_raises(config, tmp_path):
     pipe = Pipeline(config, output_root=tmp_path)
-    ws = Workspace(tmp_path, "T", "BV1")
-    ws.ensure()
-    t_raw = {
-        "combinedPhrases": [{"text": "hi"}],
-        "phrases": [
-            {"offsetMilliseconds": 0, "durationMilliseconds": 1000, "locale": "zh-CN", "text": "hi"}
-        ],
-    }
-    ws.transcript_json_path.write_text(json.dumps(t_raw))
-    ws.metadata_path.write_text(json.dumps(VideoMetadata(video_id="BV1", title="T").to_dict()))
+    ws = _seed_summarize_ws(tmp_path)
     with patch("forge_video_summarizer.pipeline.summarize_transcript", return_value="# S"), \
          patch("forge_video_summarizer.pipeline.generate_overview_image",
                side_effect=RuntimeError("boom")):

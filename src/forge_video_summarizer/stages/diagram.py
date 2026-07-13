@@ -6,8 +6,8 @@ overview of the topic. We render that JSON to a PNG with `excalidraw-brute-expor
 embed the image at the top of the Notion page.
 
 Why Excalidraw (not Mermaid, not image-gen):
-- Mermaid's auto-layout came out cramped and hard to read; Excalidraw gives a clean,
-  hand-drawn box-and-arrow look with deliberate placement.
+- Mermaid's auto-layout came out cramped and hard to read; Excalidraw gives clean,
+  deliberately-placed boxes and arrows (rendered in a normal, non hand-drawn font).
 - It's still STRUCTURED (real labels, correct relationships) — not a garbled image-gen
   picture. The model authors the scene JSON; the labels are real content from the summary.
 - The output is a normal PNG that embeds anywhere (Notion image block).
@@ -28,7 +28,7 @@ from pathlib import Path
 from typing import Any
 
 from ..config import Config
-from ..errors import SummarizationError
+from ._openai import call_responses, make_client
 
 __all__ = [
     "generate_overview_image",
@@ -186,42 +186,19 @@ def render_excalidraw(
     return False, detail or f"exporter exit {proc.returncode}"
 
 
-def _make_client(config: Config):
-    try:
-        from openai import OpenAI
-    except ImportError as exc:  # pragma: no cover - dependency guard
-        raise SummarizationError("The 'openai' package is required for diagrams") from exc
-    return OpenAI(base_url=config.openai_endpoint, api_key=config.openai_key)
+def _scene_from_model(config: Config, client: Any, user_input: str) -> dict | None:
+    """One model call: build the instruction, send user_input, parse the reply into a scene."""
+    instruction = _SCENE_INSTRUCTION.replace("__SPECIALIST__", _load_specialist())
+    return extract_scene(call_responses(client, config, instruction, user_input))
 
 
-def _extract_output_text(response: Any) -> str:
-    text = getattr(response, "output_text", None)
-    if text:
-        return text.strip()
-    chunks: list[str] = []
-    for item in getattr(response, "output", []) or []:
-        content = getattr(item, "content", None)
-        if content is None and isinstance(item, dict):
-            content = item.get("content")
-        for block in content or []:
-            block_text = getattr(block, "text", None)
-            if block_text is None and isinstance(block, dict):
-                block_text = block.get("text")
-            if block_text:
-                chunks.append(block_text)
-    return "".join(chunks).strip()
-
-
-def _call_model(client: Any, config: Config, instruction: str, user_input: str) -> str:
-    try:
-        response = client.responses.create(
-            model=config.openai_deployment,
-            instructions=instruction,
-            input=user_input,
-        )
-    except Exception as exc:  # noqa: BLE001 - uniform surface for SDK/transport errors
-        raise SummarizationError(f"overview image request failed: {exc}") from exc
-    return _extract_output_text(response)
+_SCENE_REQUEST = "Here is the finished summary. Produce the Excalidraw overview scene.\n\n"
+_SCENE_RETRY_NUDGE = (
+    "\n\nYour previous attempt did not produce a renderable Excalidraw scene. Return ONLY a "
+    "single valid Excalidraw JSON object (type/version/elements/appState), with every "
+    "labeled shape using the boundElements + containerId text binding, and no prose or "
+    "code fences."
+)
 
 
 def build_overview_scene(
@@ -234,14 +211,8 @@ def build_overview_scene(
     config.require_openai()
     if not summary_markdown.strip():
         return None
-    client = client or _make_client(config)
-    instruction = _SCENE_INSTRUCTION.replace("__SPECIALIST__", _load_specialist())
-    user_input = (
-        "Here is the finished summary. Produce the Excalidraw overview scene.\n\n"
-        f"{summary_markdown}"
-    )
-    reply = _call_model(client, config, instruction, user_input)
-    return extract_scene(reply)
+    client = client or make_client(config)
+    return _scene_from_model(config, client, _SCENE_REQUEST + summary_markdown)
 
 
 def generate_overview_image(
@@ -255,43 +226,27 @@ def generate_overview_image(
     """Generate + render an Excalidraw overview image to out_png. Returns the path or None.
 
     Flow: model authors the scene JSON -> parse -> render to PNG. On invalid JSON or a failed
-    render, regenerate once; if that also fails, return None so the caller degrades (the
-    summary ships without an overview image).
+    render, regenerate once (with a corrective nudge); if that also fails, return None so the
+    caller degrades (the summary ships without an overview image).
     """
     config.require_openai()
     if not summary_markdown.strip():
         return None
+    client = client or make_client(config)
 
-    client = client or _make_client(config)
-
-    scene = build_overview_scene(summary_markdown, config, client=client)
-    if scene is not None:
+    inputs = (
+        _SCENE_REQUEST + summary_markdown,
+        _SCENE_REQUEST + summary_markdown + _SCENE_RETRY_NUDGE,
+    )
+    for attempt, user_input in enumerate(inputs):
+        scene = _scene_from_model(config, client, user_input)
+        if scene is None:
+            log.warning("no valid Excalidraw scene from model (attempt %d)", attempt + 1)
+            continue
         ok, detail = render_excalidraw(scene, out_png, exporter=exporter)
         if ok:
             return out_png
         if detail == "no-exporter":
-            return None  # tool absent — no point retrying
-        log.warning("overview image render failed (%s); regenerating once", detail)
-    else:
-        log.warning("model did not return a valid Excalidraw scene; regenerating once")
-
-    # One retry with a nudge toward valid, renderable JSON.
-    retry_input = (
-        "Here is the finished summary. Produce the Excalidraw overview scene.\n\n"
-        f"{summary_markdown}\n\n"
-        "Your previous attempt did not produce a renderable Excalidraw scene. Return ONLY a "
-        "single valid Excalidraw JSON object (type/version/elements/appState), with every "
-        "labeled shape using the boundElements + containerId text binding, and no prose or "
-        "code fences."
-    )
-    instruction = _SCENE_INSTRUCTION.replace("__SPECIALIST__", _load_specialist())
-    reply = _call_model(client, config, instruction, retry_input)
-    scene = extract_scene(reply)
-    if scene is None:
-        log.warning("overview image still invalid after retry; skipping")
-        return None
-    ok, detail = render_excalidraw(scene, out_png, exporter=exporter)
-    if ok:
-        return out_png
-    log.warning("overview image render still failed after retry (%s); skipping", detail)
+            return None  # tool absent — retrying won't help
+        log.warning("overview image render failed (attempt %d): %s", attempt + 1, detail)
     return None
