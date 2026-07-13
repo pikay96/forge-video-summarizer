@@ -61,22 +61,21 @@ natively.
 
 ## 5. Decisions
 
-### LOCKED
+### LOCKED (D1–D8)
 
 - **D1 — Frame selection: ✅ (a) scene-change detection.** `ffmpeg
   select='gt(scene,<thr>)'` extracts frames where the picture materially changes (slide
-  flips, new diagram/whiteboard state). No LLM in this step. Followed by a **cap + dedup**
-  pass so the frame set stays within the vision budget (see D3). Anchor-alignment (old
-  option c) is retained only as a fallback when scene detection yields too few frames.
+  flips, new diagram/whiteboard state). No LLM in this step. Followed by a **dedup pass +
+  runaway guardrails** (see D3) so noisy sources don't explode the frame set. Anchor-
+  alignment (old option c) is retained only as a fallback when scene detection yields too
+  few frames.
 
 - **D2 — Vision architecture: ✅ (a) see-then-write.** When `--visual` is on, send the
-  capped frame set + transcript to `gpt-5.6-sol` in a single multimodal Responses API
+  deduped frame set + transcript to `gpt-5.6-sol` in a single multimodal Responses API
   call. The model writes the summary *and* emits image placeholders (e.g.
   `![](frame@MM:SS)`) at the points where a picture helps. The exporter later resolves
   those placeholders to embedded, uploaded frames. Mechanical "illustrate-after" is kept
   only as a degraded fallback if the model emits no parseable placeholders.
-
-### Still open (to lock next)
 
 - **D3 — Frame budget: ✅ no fixed cap.** The number of frames scales with the video's
   own visual complexity and length — a fixed ceiling would over-sample simple videos and
@@ -171,11 +170,13 @@ natively.
 - Frame extraction, visual summarize, and image-embedding are unit-tested (ffmpeg + vision
   + notion upload mocked).
 - Live-verified on the real Agent Memory bilibili video.
-- Frame count / token cost stays within the D3 budget.
+- Frame count stays sensible via D3's dedup + runaway guardrails (no unbounded blow-ups),
+  while still scaling naturally with video complexity.
 
 ## 9. Risks / notes
 
-- **Cost** is the headline risk — many images × vision tokens. D3 caps are essential.
+- **Cost** is the headline risk — many images × vision tokens. D3's dedup + runaway
+  guardrails (and downscaling) keep it bounded without an arbitrary cap.
 - Scene detection tuning is content-dependent (0.4 is a starting threshold, not sacred).
 - Notion File Upload API has size/type constraints + is newer — verify limits during build.
 - Placeholder convention must be robust (model must reliably emit parseable markers, or we
