@@ -32,17 +32,16 @@ works: download from https://johnvansickle.com/ffmpeg/, then drop `ffmpeg`/`ffpr
 into `~/.local/bin`. (A Windows `ffmpeg.exe` reached via `/mnt/c` PATH can raise
 `PermissionError` under WSL — prefer a native Linux binary.)
 
-**Optional — Mermaid validation for the overview diagram.** Each summary opens with an
-auto-generated Mermaid overview diagram (see [Overview diagram](#overview-diagram)). To
-strictly validate that diagram renders before embedding it, install the Node-based
-mermaid-cli once:
+**Optional — overview image renderer.** Each summary gets an auto-generated **Excalidraw
+overview image** (see [Overview image](#overview-image)). Rendering needs a Node CLI plus a
+headless browser (one-time):
 
 ```bash
-npm install        # installs @mermaid-js/mermaid-cli (mmdc) into node_modules/
+npm install                              # installs excalidraw-brute-export-cli
+npx playwright install chromium firefox  # headless browsers it drives
 ```
 
-If `mmdc` is absent the pipeline still runs — it simply skips strict validation and embeds
-the diagram as-is (it still renders in Notion when well-formed).
+If the renderer is absent the pipeline still runs — it just skips the overview image.
 
 ## Configure
 
@@ -93,30 +92,29 @@ Flags: `--output <dir>` (default `output/`), `--force` (ignore cache), `--env <p
    response as source of truth.
 4. **Summarize** — Azure OpenAI Responses API. Teacher-clear + interview-ready markdown,
    length scales with duration, one `[MM:SS]` anchor per meaningful topic shift. Then a
-   **dedicated second pass** generates a Mermaid **overview diagram** from the finished
-   summary and prepends it as an `## Overview` section (see below).
+   **dedicated second pass** authors an **Excalidraw overview image** from the finished
+   summary and renders it to `overview.png` (see below).
 5. **Export** — publishes `summary.md` to Notion as a **subpage** of a configured parent
-   page (official `notion-client` SDK). Each page carries an embedded bilibili video, a
-   metadata callout, and the summary as native blocks (including the Mermaid overview,
-   which Notion renders as a diagram); `[MM:SS]` anchors are plain text (bilibili's web
+   page (official `notion-client` SDK). Each page carries the **overview image** (uploaded
+   via Notion `file_uploads`) at the top, an embedded bilibili video, a metadata callout,
+   and the summary as native blocks; `[MM:SS]` anchors are plain text (bilibili's web
    player ignores `?t=` deep links). Idempotent (dedups by video-id marker in the title,
    archives + recreates) and chunks block appends at Notion's 100-per-request limit. Audio
    and transcript are intentionally excluded.
 
-## Overview diagram
+## Overview image
 
-Every summary opens with an auto-generated **Mermaid overview diagram** — an at-a-glance map
-of the video's key concepts and how they relate. It's generated in a **dedicated second
-model pass** (after the prose summary) so the model gives the diagram undivided attention and
-works from the already-distilled summary. The model **chooses the diagram type** (flowchart,
-mind-map, sequence, etc.) to fit the content, and labels are in the summary's dominant
-language.
+Every summary gets an auto-generated **Excalidraw overview image** — a clean, hand-drawn
+concept map of the video's key ideas and how they relate, embedded at the top of the Notion
+page. It's produced in a **dedicated second model pass** (after the prose summary): the model
+authors an Excalidraw scene (structured JSON — real labels, correct relationships, in the
+summary's dominant language), which is rendered to `overview.png` and uploaded to Notion.
 
-Mermaid is used deliberately over image generation: it produces **faithful, correct labels
-and real relationships** (a concept map), not a plausible-but-garbled picture. The generated
-diagram is **strictly validated** by rendering it with `mmdc` (mermaid-cli); on failure it
-regenerates once (feeding the parser error back), then degrades gracefully — the summary
-always ships. Notion renders the ` ```mermaid ` block as a real diagram.
+Excalidraw is used deliberately over Mermaid (whose auto-layout came out cramped/hard to
+read) and over image generation (which invents garbled labels on technical content): the
+model authors a **structured** scene, so labels are faithful while the layout is clean and
+readable. Rendering uses `excalidraw-brute-export-cli` (headless browser); if it's absent the
+step degrades gracefully and the summary ships without the image.
 
 ## Layout
 
@@ -129,9 +127,9 @@ src/forge_video_summarizer/
 ├── models.py         # VideoMetadata, Transcript, TranscriptSegment
 ├── errors.py         # typed exceptions
 ├── downloaders/      # pluggable per-site (base + bilibili + registry)
-├── prompts/          # vendored mermaid-diagram-specialist instruction (package data)
+├── prompts/          # vendored excalidraw specialist instruction (package data)
 └── stages/           # extract, transcribe, summarize, diagram, export_notion
-tests/                # unit tests (network/subprocess/Notion API/mmdc mocked)
+tests/                # unit tests (network/subprocess/Notion API/renderer mocked)
 ```
 
 ## Test

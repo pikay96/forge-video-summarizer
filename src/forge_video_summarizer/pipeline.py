@@ -17,8 +17,7 @@ from .models import Transcript, VideoMetadata
 from .stages import (
     export_summary,
     extract_audio,
-    generate_overview_diagram,
-    prepend_overview,
+    generate_overview_image,
     probe_duration,
     summarize_transcript,
     transcribe_audio,
@@ -119,18 +118,16 @@ class Pipeline:
         )
         metadata = self._read_metadata(ws)
         summary = summarize_transcript(transcript, self.config, metadata=metadata)
-
-        # Overview diagram (always-on): a dedicated second pass turns the finished
-        # summary into one Mermaid overview, prepended as an `## Overview` section.
-        # Best-effort — a failed/invalid diagram must never block the summary.
-        try:
-            mermaid = generate_overview_diagram(summary, self.config)
-            if mermaid:
-                summary = prepend_overview(summary, mermaid)
-        except Exception as exc:  # noqa: BLE001 - diagram is additive, degrade gracefully
-            log.warning("overview diagram step failed, shipping summary without it: %s", exc)
-
         ws.summary_path.write_text(summary, "utf-8")
+
+        # Overview image (always-on): a dedicated second pass renders an Excalidraw scene
+        # to overview.png, embedded at the top of the Notion page on export. Best-effort —
+        # a failed render must never block the summary.
+        try:
+            generate_overview_image(summary, self.config, ws.overview_image_path)
+        except Exception as exc:  # noqa: BLE001 - overview is additive, degrade gracefully
+            log.warning("overview image step failed, continuing without it: %s", exc)
+
         return ws.summary_path
 
     # ── Stage 5 ─────────────────────────────────────────────────────────
@@ -142,7 +139,8 @@ class Pipeline:
 
         summary = ws.summary_path.read_text("utf-8")
         metadata = self._read_metadata(ws)
-        url = export_summary(summary, self.config, metadata=metadata)
+        overview = ws.overview_image_path if ws.overview_image_path.is_file() else None
+        url = export_summary(summary, self.config, metadata=metadata, overview_image=overview)
         ws.notion_url_path.write_text(url, "utf-8")
         return url
 

@@ -1,5 +1,17 @@
 # PRD — Overview diagram (Mermaid) in the summary
 
+> **SUPERSEDED 2026-07:** the overview was switched from Mermaid to an **Excalidraw image**.
+> Pikay found the rendered Mermaid "ugly and hard to read" and asked for a cleaner visual —
+> "it doesn't have to be a diagram, just an image that can clearly show the topic overview."
+> As-built: the model authors an Excalidraw scene (structured JSON, faithful labels, dominant
+> language) → rendered to `overview.png` via `excalidraw-brute-export-cli` (headless browser)
+> → uploaded to Notion via `file_uploads` and embedded as an image block at the TOP of the
+> page (no longer a text block inside summary.md). The core reasoning below still holds
+> (structured-authoring beats image-gen for faithfulness; dedicated second pass; always-on;
+> dominant-language labels; graceful degrade). What changed: renderer (mmdc → excalidraw CLI),
+> placement (in-summary text block → uploaded image at page top), and validation (strict mmdc
+> parse → render-succeeds check). See the `forge-video-summarizer` skill for as-built detail.
+
 **Status:** Locked (all decisions D + O1–O5 settled; ready to build) · **Owner:** Pikay · **Depends on:** Stage 4 (summarize), Stage 5
 (Notion export) · **Relation:** enhances the *original* text summarizer; independent of the
 Stage 6 visual-frames feature (that PRD covers real frames/GIFs; this covers a structured

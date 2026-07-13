@@ -17,12 +17,17 @@ on click, so a hyperlink would just land at the start and mislead.
 from __future__ import annotations
 
 import contextlib
+import logging
+import mimetypes
 import re
+from pathlib import Path
 from typing import Any
 
 from ..config import Config
 from ..errors import ExportError
 from ..models import VideoMetadata
+
+log = logging.getLogger(__name__)
 
 __all__ = [
     "export_summary",
@@ -123,7 +128,6 @@ def markdown_to_blocks(markdown: str) -> list[dict]:
 _NOTION_LANGS = {
     "py": "python", "python": "python", "js": "javascript", "ts": "typescript",
     "json": "json", "bash": "bash", "sh": "shell", "shell": "shell", "text": "plain text",
-    "mermaid": "mermaid",
 }
 
 
@@ -198,11 +202,30 @@ def _archive_page(client: Any, page_id: str) -> None:
         client.pages.update(page_id=page_id, archived=True)
 
 
+def _upload_image_block(client: Any, image_path: Path) -> dict | None:
+    """Upload a local image to Notion via file_uploads and return an `image` block that
+    references it, or None if the upload fails (best-effort — the page still exports)."""
+    try:
+        name = image_path.name
+        mime = mimetypes.guess_type(name)[0] or "image/png"
+        up = client.file_uploads.create(mode="single_part", filename=name, content_type=mime)
+        with image_path.open("rb") as fh:
+            client.file_uploads.send(file_upload_id=up["id"], file=(name, fh, mime))
+        return {
+            "type": "image",
+            "image": {"type": "file_upload", "file_upload": {"id": up["id"]}},
+        }
+    except Exception as exc:  # noqa: BLE001 - overview image is additive; never block export
+        log.warning("overview image upload failed: %s", exc)
+        return None
+
+
 def export_summary(
     summary_markdown: str,
     config: Config,
     *,
     metadata: VideoMetadata | None = None,
+    overview_image: Path | None = None,
     client: Any | None = None,
 ) -> str:
     """Create/update a Notion subpage for this summary. Returns the page URL.
@@ -223,6 +246,13 @@ def export_summary(
     marker_title = _title_with_id(raw_title, video_id)
 
     all_blocks = _header_blocks(metadata, video_url) + markdown_to_blocks(summary_markdown)
+
+    # Overview image at the very top (best-effort upload; skipped on failure).
+    if overview_image is not None and Path(overview_image).is_file():
+        img_block = _upload_image_block(client, Path(overview_image))
+        if img_block is not None:
+            all_blocks = [img_block, *all_blocks]
+
     first, rest = all_blocks[:NOTION_BLOCK_LIMIT], all_blocks[NOTION_BLOCK_LIMIT:]
 
     try:

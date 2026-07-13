@@ -68,6 +68,10 @@ class Workspace:
         return self.dir / "summary.md"
 
     @property
+    def overview_image_path(self) -> Path:
+        return self.dir / "overview.png"
+
+    @property
     def notion_url_path(self) -> Path:
         return self.dir / "notion_url.txt"
 

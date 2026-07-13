@@ -89,14 +89,6 @@ def test_heading_timestamp_is_plain_text():
     assert "".join(s["text"]["content"] for s in spans) == "[00:00] Intro"
 
 
-def test_mermaid_code_block_maps_to_mermaid_language():
-    md = "```mermaid\nflowchart TD\n    A --> B\n```"
-    blocks = markdown_to_blocks(md)
-    assert blocks[0]["type"] == "code"
-    assert blocks[0]["code"]["language"] == "mermaid"  # renders as a diagram in Notion
-    assert "flowchart TD" in blocks[0]["code"]["rich_text"][0]["text"]["content"]
-
-
 # ── export_summary (mocked notion-client) ───────────────────────────────────
 
 def _fake_client(existing_children=None):
@@ -105,6 +97,8 @@ def _fake_client(existing_children=None):
         "results": existing_children or [], "has_more": False, "next_cursor": None,
     }
     client.pages.create.return_value = {"id": "newpage-id-0000"}
+    client.file_uploads.create.return_value = {"id": "up-123", "status": "pending"}
+    client.file_uploads.send.return_value = {"status": "uploaded"}
     return client
 
 
@@ -166,3 +160,38 @@ def test_export_wraps_api_errors(config):
     client.pages.create.side_effect = RuntimeError("boom 401")
     with pytest.raises(ExportError, match="Notion export failed"):
         export_summary("# hi\n\nx", config, metadata=_meta(), client=client)
+
+
+def test_export_embeds_overview_image_first(config, tmp_path):
+    client = _fake_client(existing_children=[])
+    png = tmp_path / "overview.png"
+    png.write_bytes(b"\x89PNG\r\n\x1a\n")
+    export_summary("# Title\n\nbody", config, metadata=_meta(),
+                   overview_image=png, client=client)
+    # uploaded via file_uploads (create + send)
+    client.file_uploads.create.assert_called_once()
+    client.file_uploads.send.assert_called_once()
+    # image block is the very first block on the page
+    first = client.pages.create.call_args.kwargs["children"]
+    assert first[0]["type"] == "image"
+    assert first[0]["image"]["file_upload"]["id"] == "up-123"
+
+
+def test_export_survives_overview_upload_failure(config, tmp_path):
+    client = _fake_client(existing_children=[])
+    client.file_uploads.create.side_effect = RuntimeError("upload boom")
+    png = tmp_path / "overview.png"
+    png.write_bytes(b"\x89PNG")
+    # export still succeeds; no image block, page created normally
+    url = export_summary("# Title\n\nbody", config, metadata=_meta(),
+                         overview_image=png, client=client)
+    assert url
+    first = client.pages.create.call_args.kwargs["children"]
+    assert first[0]["type"] != "image"
+
+
+def test_export_no_overview_when_absent(config, tmp_path):
+    client = _fake_client(existing_children=[])
+    export_summary("# Title\n\nbody", config, metadata=_meta(),
+                   overview_image=tmp_path / "missing.png", client=client)
+    client.file_uploads.create.assert_not_called()

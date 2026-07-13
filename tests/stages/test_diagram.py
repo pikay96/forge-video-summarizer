@@ -1,115 +1,92 @@
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 from forge_video_summarizer.stages.diagram import (
-    OVERVIEW_HEADING,
-    extract_mermaid,
-    generate_overview_diagram,
-    prepend_overview,
-    validate_mermaid,
+    build_overview_scene,
+    extract_scene,
+    generate_overview_image,
+    render_excalidraw,
 )
 
-VALID = "flowchart TD\n    A[开始] --> B[结束]"
+SCENE = {
+    "type": "excalidraw",
+    "version": 2,
+    "elements": [
+        {"type": "rectangle", "id": "r1", "x": 0, "y": 0, "width": 200, "height": 80},
+    ],
+    "appState": {"viewBackgroundColor": "#ffffff"},
+}
+SCENE_JSON = json.dumps(SCENE, ensure_ascii=False)
 
 
-# ── extract_mermaid ─────────────────────────────────────────────────────────
+# ── extract_scene ───────────────────────────────────────────────────────────
 
-def test_extract_from_fenced_block():
-    reply = f"Here you go:\n```mermaid\n{VALID}\n```\nDone."
-    assert extract_mermaid(reply) == VALID
-
-
-def test_extract_from_bare_diagram():
-    # no fences, but starts with a known diagram type
-    assert extract_mermaid(VALID) == VALID
+def test_extract_bare_json():
+    assert extract_scene(SCENE_JSON)["elements"][0]["id"] == "r1"
 
 
-def test_extract_returns_empty_when_none():
-    assert extract_mermaid("just some prose, no diagram here") == ""
+def test_extract_fenced_json():
+    reply = f"Here:\n```json\n{SCENE_JSON}\n```"
+    assert extract_scene(reply)["type"] == "excalidraw"
 
 
-def test_extract_prefers_fenced_over_bare():
-    reply = f"```mermaid\n{VALID}\n```"
-    assert extract_mermaid(reply) == VALID
+def test_extract_with_leading_prose():
+    reply = f"Sure, here is the scene: {SCENE_JSON} — enjoy!"
+    got = extract_scene(reply)
+    assert got is not None and got["elements"]
 
 
-# ── validate_mermaid (mmdc mocked) ──────────────────────────────────────────
-
-def test_validate_empty_is_invalid():
-    ok, detail = validate_mermaid("   ")
-    assert ok is False
-    assert "empty" in detail
+def test_extract_rejects_non_scene():
+    assert extract_scene('{"foo": 1}') is None  # no elements list
+    assert extract_scene("not json at all") is None
+    assert extract_scene('{"elements": "notalist"}') is None
 
 
-def test_validate_missing_mmdc_degrades_to_unvalidated(monkeypatch):
-    # find_mmdc returns None -> we do NOT fail the pipeline
-    monkeypatch.setattr(
-        "forge_video_summarizer.stages.diagram.find_mmdc", lambda: None
-    )
-    ok, detail = validate_mermaid(VALID)
-    assert ok is True
-    assert detail == "unvalidated"
+# ── render_excalidraw (exporter mocked / faked) ─────────────────────────────
+
+def test_render_missing_exporter(monkeypatch, tmp_path):
+    monkeypatch.setattr("forge_video_summarizer.stages.diagram.find_exporter", lambda: None)
+    ok, detail = render_excalidraw(dict(SCENE), tmp_path / "o.png")
+    assert ok is False and detail == "no-exporter"
 
 
-def test_validate_success(monkeypatch, tmp_path):
-    # Fake mmdc that "renders" by writing the output file and exiting 0.
+def test_render_success_writes_scene_and_checks_png(monkeypatch, tmp_path):
+    out = tmp_path / "o.png"
+
     def fake_run(cmd, capture_output, text, timeout):
-        out = cmd[cmd.index("-o") + 1]
-        with open(out, "w") as fh:
-            fh.write("<svg/>")
+        # emulate the CLI writing the -o target
+        o = cmd[cmd.index("-o") + 1]
+        with open(o, "wb") as fh:
+            fh.write(b"\x89PNG\r\n")
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr("forge_video_summarizer.stages.diagram.subprocess.run", fake_run)
-    ok, detail = validate_mermaid(VALID, mmdc="/fake/mmdc")
-    assert ok is True
-    assert detail == "ok"
+    ok, detail = render_excalidraw(dict(SCENE), out, exporter="/fake/cli")
+    assert ok is True and detail == "ok"
+    assert out.exists()
+    # scene JSON was written next to the png with envelope fields normalized
+    scene_file = out.with_suffix(".excalidraw")
+    assert scene_file.exists()
+    written = json.loads(scene_file.read_text())
+    assert written["type"] == "excalidraw" and written["appState"]["viewBackgroundColor"]
 
 
-def test_validate_parse_error(monkeypatch):
-    # mmdc exits 1, writes no output, emits a parse error line.
+def test_render_failure_reports_error(monkeypatch, tmp_path):
     def fake_run(cmd, capture_output, text, timeout):
-        return SimpleNamespace(
-            returncode=1, stdout="", stderr="Error: Parse error on line 2:\n  ...",
-        )
+        return SimpleNamespace(returncode=1, stdout="", stderr="error: bad scene")
 
     monkeypatch.setattr("forge_video_summarizer.stages.diagram.subprocess.run", fake_run)
-    ok, detail = validate_mermaid("flowchart TD\n  A[bad", mmdc="/fake/mmdc")
+    ok, detail = render_excalidraw(dict(SCENE), tmp_path / "o.png", exporter="/fake/cli")
     assert ok is False
-    assert "Parse error" in detail
+    assert "bad scene" in detail
 
 
-def test_validate_invokes_real_subprocess(tmp_path):
-    # A fake mmdc executable that mimics the real contract: `-o <out>` file written on
-    # success. Exercises the actual subprocess invocation path (arg parsing, file check).
-    fake = tmp_path / "mmdc"
-    fake.write_text(
-        "#!/usr/bin/env bash\n"
-        'out=""\n'
-        'while [ $# -gt 0 ]; do [ "$1" = "-o" ] && { out="$2"; shift; }; shift; done\n'
-        'echo "<svg/>" > "$out"\n'
-        "exit 0\n"
-    )
-    fake.chmod(0o755)
-    ok, detail = validate_mermaid(VALID, mmdc=str(fake))
-    assert ok is True and detail == "ok"
-
-
-def test_validate_real_subprocess_rejects(tmp_path):
-    # Fake mmdc that exits 1 and writes nothing -> invalid.
-    fake = tmp_path / "mmdc"
-    fake.write_text("#!/usr/bin/env bash\necho 'Parse error on line 1' >&2\nexit 1\n")
-    fake.chmod(0o755)
-    ok, detail = validate_mermaid("flowchart TD\n A[", mmdc=str(fake))
-    assert ok is False
-    assert "Parse error" in detail
-
-
-# ── generate_overview_diagram (model + validation mocked) ───────────────────
+# ── build_overview_scene / generate_overview_image ──────────────────────────
 
 def _client_returning(*texts):
-    """A fake OpenAI client whose responses.create yields the given texts in order."""
     client = MagicMock()
     client.responses.create.side_effect = [
         SimpleNamespace(output_text=t) for t in texts
@@ -117,76 +94,73 @@ def _client_returning(*texts):
     return client
 
 
-def test_generate_success_first_try(config, monkeypatch):
+def test_build_scene_parses_model_reply(config):
+    client = _client_returning(f"```json\n{SCENE_JSON}\n```")
+    scene = build_overview_scene("# Summary", config, client=client)
+    assert scene["elements"][0]["id"] == "r1"
+
+
+def test_build_scene_empty_summary_returns_none(config):
+    client = MagicMock()
+    assert build_overview_scene("   ", config, client=client) is None
+    client.responses.create.assert_not_called()
+
+
+def test_generate_success_first_try(config, monkeypatch, tmp_path):
+    def fake_render(scene, out, exporter=None):
+        out.write_bytes(b"png")
+        return (True, "ok")
+
     monkeypatch.setattr(
-        "forge_video_summarizer.stages.diagram.validate_mermaid",
-        lambda code, mmdc=None: (True, "ok"),
+        "forge_video_summarizer.stages.diagram.render_excalidraw", fake_render
     )
-    client = _client_returning(f"```mermaid\n{VALID}\n```")
-    out = generate_overview_diagram("# Summary\n\nbody", config, client=client)
-    assert out == VALID
+    client = _client_returning(SCENE_JSON)
+    out = tmp_path / "overview.png"
+    got = generate_overview_image("# Summary", config, out, client=client)
+    assert got == out
     assert client.responses.create.call_count == 1
 
 
-def test_generate_retries_on_invalid_then_succeeds(config, monkeypatch):
-    calls = {"n": 0}
-
-    def fake_validate(code, mmdc=None):
-        calls["n"] += 1
-        return (calls["n"] > 1, "Parse error" if calls["n"] == 1 else "ok")
-
+def test_generate_retries_on_bad_scene_then_succeeds(config, monkeypatch, tmp_path):
     monkeypatch.setattr(
-        "forge_video_summarizer.stages.diagram.validate_mermaid", fake_validate
+        "forge_video_summarizer.stages.diagram.render_excalidraw",
+        lambda scene, out, exporter=None: (True, "ok"),
     )
-    client = _client_returning(
-        "```mermaid\nflowchart TD\n  A[bad\n```",  # invalid first
-        f"```mermaid\n{VALID}\n```",  # fixed on retry
-    )
-    out = generate_overview_diagram("# Summary", config, client=client)
-    assert out == VALID
+    # first reply is not a scene, second is valid
+    client = _client_returning("no scene here", SCENE_JSON)
+    out = tmp_path / "overview.png"
+    got = generate_overview_image("# Summary", config, out, client=client)
+    assert got == out
     assert client.responses.create.call_count == 2
 
 
-def test_generate_gives_up_after_retry(config, monkeypatch):
+def test_generate_gives_up_when_exporter_absent(config, monkeypatch, tmp_path):
     monkeypatch.setattr(
-        "forge_video_summarizer.stages.diagram.validate_mermaid",
-        lambda code, mmdc=None: (False, "Parse error"),
+        "forge_video_summarizer.stages.diagram.render_excalidraw",
+        lambda scene, out, exporter=None: (False, "no-exporter"),
     )
-    client = _client_returning(
-        "```mermaid\nbad1\n```",
-        "```mermaid\nbad2\n```",
+    client = _client_returning(SCENE_JSON)
+    out = tmp_path / "overview.png"
+    got = generate_overview_image("# Summary", config, out, client=client)
+    assert got is None
+    # no retry when the tool is simply missing
+    assert client.responses.create.call_count == 1
+
+
+def test_generate_gives_up_after_retry(config, monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        "forge_video_summarizer.stages.diagram.render_excalidraw",
+        lambda scene, out, exporter=None: (False, "render error"),
     )
-    out = generate_overview_diagram("# Summary", config, client=client)
-    assert out is None
+    client = _client_returning(SCENE_JSON, SCENE_JSON)
+    out = tmp_path / "overview.png"
+    got = generate_overview_image("# Summary", config, out, client=client)
+    assert got is None
     assert client.responses.create.call_count == 2
 
 
 def test_generate_empty_summary_returns_none(config):
     client = MagicMock()
-    assert generate_overview_diagram("   ", config, client=client) is None
+    assert generate_overview_image("  ", config, __import__("pathlib").Path("/x.png"),
+                                   client=client) is None
     client.responses.create.assert_not_called()
-
-
-def test_generate_handles_output_blocks_shape(config, monkeypatch):
-    # Response without output_text, using the nested output/content/text block shape.
-    monkeypatch.setattr(
-        "forge_video_summarizer.stages.diagram.validate_mermaid",
-        lambda code, mmdc=None: (True, "ok"),
-    )
-    block = SimpleNamespace(text=f"```mermaid\n{VALID}\n```")
-    item = SimpleNamespace(content=[block])
-    resp = SimpleNamespace(output_text=None, output=[item])
-    client = MagicMock()
-    client.responses.create.return_value = resp
-    out = generate_overview_diagram("# Summary", config, client=client)
-    assert out == VALID
-
-
-# ── prepend_overview ────────────────────────────────────────────────────────
-
-def test_prepend_overview_adds_section():
-    out = prepend_overview("# Title\n\nbody", VALID)
-    assert out.startswith(OVERVIEW_HEADING)
-    assert "```mermaid" in out
-    assert VALID in out
-    assert out.rstrip().endswith("body")

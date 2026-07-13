@@ -2,9 +2,9 @@
   "name": "forge-video-summarizer-tools",
   "version": "1.0.0",
   "private": true,
-  "description": "Node tooling for forge-video-summarizer: mermaid-cli (mmdc) for strict validation of model-generated Mermaid overview diagrams. Install with `npm install`.",
+  "description": "Node tooling for forge-video-summarizer: excalidraw-brute-export-cli renders the model-authored Excalidraw overview scene to a PNG for embedding in Notion. Install with `npm install`, then `npx playwright install chromium firefox`.",
   "license": "MIT",
   "devDependencies": {
-    "@mermaid-js/mermaid-cli": "^11.16.0"
+    "excalidraw-brute-export-cli": "^0.4.0"
   }
 }
