@@ -1,6 +1,6 @@
 # PRD — Overview diagram (Mermaid) in the summary
 
-**Status:** Draft · **Owner:** Pikay · **Depends on:** Stage 4 (summarize), Stage 5
+**Status:** Locked (all decisions D + O1–O5 settled; ready to build) · **Owner:** Pikay · **Depends on:** Stage 4 (summarize), Stage 5
 (Notion export) · **Relation:** enhances the *original* text summarizer; independent of the
 Stage 6 visual-frames feature (that PRD covers real frames/GIFs; this covers a structured
 concept diagram).
@@ -92,43 +92,58 @@ practices (keep < ~20 nodes, subgraphs for grouping, clear labels, test renderin
 - Rendering Mermaid → static image ourselves (Notion renders it; no headless renderer).
 - Human-in-the-loop diagram editing round-trips.
 
-## 8. Open decisions (to lock)
+## 8. Decisions O1–O5 (LOCKED)
 
-- **O1 — Always-on or flag?** Is the overview diagram part of the *default* summarize
-  output, or gated behind a flag (e.g. `--diagram`)? Unlike the heavy visual-frames
-  feature, this is cheap (one text call, no images) — leaning **always-on**, since it
-  strictly improves the summary at negligible cost. Confirm.
-- **O2 — Placement.** Top of the summary (an `## Overview` section before the prose) vs
-  bottom (a "big picture" recap). Leaning **top** — it's a map you read before diving in.
-- **O3 — Validation.** Do we validate the Mermaid renders (e.g. a syntax sanity check /
-  optional `mermaid.live`-style parse) and retry on failure, or trust the model + let
-  Notion show a code block if it's malformed? Leaning **light validation**: a cheap
-  structural check (correct fenced block, known diagram header, balanced brackets) with one
-  regen retry; no heavyweight renderer dependency.
-- **O4 — Failure behavior.** If diagram generation fails after retry, does the summary ship
-  without it (degrade gracefully, warn) or is it a hard error? Leaning **graceful** — the
-  text summary is the primary deliverable; the diagram is additive.
-- **O5 — Language of labels.** Match the summary's dominant language (Chinese for your
-  content) so the diagram reads consistently? Leaning **yes, match summary language.**
+- **O1 — Always-on: ✅.** The overview diagram is part of the *default* summarize output,
+  not behind a flag. It's cheap (one text call) and strictly improves the summary.
+- **O2 — Placement: ✅ top.** Prepended as an `## Overview` section before the prose — a map
+  you read before diving in.
+- **O3 — Validation: ✅ strict (real Mermaid parse).** Before embedding, validate the
+  generated Mermaid by actually rendering it with `@mermaid-js/mermaid-cli` (`mmdc`). A
+  clean render (exit 0 + output produced) = valid; a parse/unknown-diagram error (exit 1,
+  no output) = invalid → regenerate (O4). Chosen over light structural checks so we catch
+  *every* syntax failure, not just obvious ones.
+  - **Verified live (probed, not assumed):** on this machine — Node v22 + npm present;
+    `@mermaid-js/mermaid-cli` installs and its headless Chromium runs on WSL; a valid
+    diagram renders (exit 0, PNG produced); an invalid one returns exit 1 with
+    "Parse error on line N" and no output; an unknown diagram type returns exit 1 with
+    "UnknownDiagramError". So exit-code + output-existence is a reliable validity signal.
+  - **New dependency:** `@mermaid-js/mermaid-cli` (Node, via npm) — a *build/runtime
+    tool*, not a Python package. Document in README setup; detect at runtime and, if absent,
+    degrade to embedding the unvalidated block (still renders in Notion when correct).
+- **O4 — Retry on failure: ✅.** If validation fails, regenerate once — feed the invalid
+  Mermaid + the parser's error message back to the model and ask it to fix. If the *retry*
+  also fails validation, degrade gracefully: ship the summary and embed the raw block as a
+  code listing (readable, just not a rendered picture) + warn. Never block the summary.
+- **O5 — Label language: ✅ match dominant language.** Diagram labels use the summary's
+  dominant language (Chinese for the current content) so the diagram reads consistently with
+  the prose. Steered explicitly in the diagram instruction.
 
-## 9. Proposed design (pending O1–O5)
+## 9. Proposed design (O1–O5 locked)
 
-- **New step — `stages/diagram.py`**: `generate_overview_diagram(summary_markdown, config,
-  *, client=None) -> str` returns a Mermaid code block. Loads the specialist prompt via
-  `importlib.resources.files("forge_video_summarizer.prompts")`, sends it as `instructions`,
-  passes the finished summary as input, requests exactly one fenced ```mermaid block. Light
-  validation + one retry (O3).
-- **Summarize integration**: after `summarize_transcript`, call the diagram step and prepend
-  an `## Overview` section (O2) to `summary.md`. Or keep it a distinct artifact merged at
-  export time — decide during build (prefer prepend so the local summary.md is complete).
-- **Export fix (one line)**: add `"mermaid": "mermaid"` to `_notion_lang`'s
-  `_NOTION_LANGS` map in `export_notion.py` so the block renders as a diagram, not flattened
-  to plain text. (The markdown→blocks code path already handles fenced code.)
-- **Config**: reuse existing Azure OpenAI config (`gpt-5.6-sol`) — no new creds.
-- **Workspace/pipeline**: no new artifact needed if prepended into summary.md; otherwise a
-  `diagram.mmd`. Pipeline runs the step inside the summarize stage.
-- **Errors**: `SummarizationError` reused (or a small `DiagramError`), graceful-degrade per
-  O4.
+- **New step — `stages/diagram.py`**:
+  - `generate_overview_diagram(summary_markdown, config, *, client=None) -> str` returns a
+    validated Mermaid code block. Loads the specialist prompt via
+    `importlib.resources.files("forge_video_summarizer.prompts")`, sends it as
+    `instructions`, passes the finished summary as input, steers labels to the summary's
+    dominant language (O5), requests exactly one fenced ```mermaid block.
+  - `validate_mermaid(code) -> bool`: writes the code to a temp `.mmd`, runs `mmdc -i … -o
+    …`, returns True on exit 0 + output produced, False otherwise (O3). Locates `mmdc` via
+    the local `node_modules/.bin` or PATH; if not found, logs a warning and treats as
+    "unvalidated" (skip strict check, embed as-is).
+  - On invalid: one regeneration passing the parser error back to the model (O4); if the
+    retry also fails, return the raw block anyway (graceful degrade) with a warning.
+- **Summarize integration**: after `summarize_transcript`, call the diagram step and
+  **prepend** an `## Overview` section (O2) into `summary.md`, so the local artifact is
+  complete and export needs no special-casing.
+- **Export fix (one line)**: add `"mermaid": "mermaid"` to `_NOTION_LANGS` in
+  `export_notion.py` so the fenced block renders as a diagram, not flattened to plain text.
+- **Config**: reuse existing Azure OpenAI (`gpt-5.6-sol`) — no new creds. `mmdc` is an
+  external Node tool (README setup), optional at runtime (degrades if absent).
+- **Workspace/pipeline**: no new artifact (diagram lives inside summary.md). The diagram
+  step runs inside the summarize stage; always-on (O1).
+- **Errors**: reuse `SummarizationError` (or a small `DiagramError`); graceful-degrade per
+  O4 — the diagram never blocks the summary.
 
 ## 10. Error handling
 
