@@ -31,9 +31,9 @@ Produce Markdown with these sections, IN THIS ORDER:
 2. TL;DR — 2-3 sentences: what the video is and its single core takeaway.
 3. Why it matters — brief framing: the problem/topic and who should care. END THIS SECTION
    with a short bullet list headed "This video answers:" giving the 3-5 KEY QUESTIONS the
-   video sets out to answer, phrased as real questions ("How much VRAM does a KV cache
-   actually need?", "Why cache K and V but not Q?"). They orient the reader before the
-   detail starts, so make them the questions someone lands on this page hoping to resolve.
+   video sets out to answer, phrased as real questions the reader would actually type into
+   a search box. They orient the reader before the detail starts, so make them the
+   questions someone lands on this page hoping to resolve.
 4. Key takeaways — bullet points the reader should walk away knowing. Placed BEFORE the
    walkthrough so a reader gets the payoff first and can then read on for the reasoning.
 5. Walkthrough — the heart of the summary. ORGANIZE IT BY CONCEPT, NOT BY THE CLOCK.
@@ -44,8 +44,8 @@ HOW TO WRITE THE WALKTHROUGH — this is what separates a summary from a transcr
 
 - Each `###` heading names a CONCEPT, MECHANISM, or QUESTION — never a timestamp and never
   a vague label like "Part 2" or "The speaker continues". Good headings read like a
-  textbook's: "Why generation must cache K and V", "MHA vs MQA vs GQA: the memory/quality
-  trade-off", "Deriving the KV cache formula".
+  textbook's: name the mechanism being explained, the question being answered, or the
+  trade-off being weighed.
 - Build a LOGICAL progression: set up the problem, develop the idea, then resolve it. A
   section may pull together material the speaker scattered across different moments, and
   the order may differ from the video's order when that explains the topic better.

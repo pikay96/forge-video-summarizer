@@ -136,17 +136,17 @@ def _ann_tags(spans):
 
 
 def test_bold_at_line_start_then_cjk():
-    # exact shape from the report: **X（...)**介于... and list "**MQA** 是..."
-    b = markdown_to_blocks("**Grouped-Query Attention（GQA）**介于 MHA 之间。")
+    # CJK text with full-width parens directly abutting **bold** markers
+    b = markdown_to_blocks("**分组查询方案（甲）**介于两者之间。")
     tags = _ann_tags(b[0]["paragraph"]["rich_text"])
-    assert tags[0] == ("b", "Grouped-Query Attention（GQA）")
+    assert tags[0] == ("b", "分组查询方案（甲）")
     assert tags[1][0] == "-" and "介于" in tags[1][1]
 
 
 def test_bold_in_list_item():
-    b = markdown_to_blocks("- **GQA** 则处于两者之间。")
+    b = markdown_to_blocks("- **折中方案** 则处于两者之间。")
     tags = _ann_tags(b[0]["bulleted_list_item"]["rich_text"])
-    assert tags[0] == ("b", "GQA")
+    assert tags[0] == ("b", "折中方案")
 
 
 def test_italic_but_not_multiplication_or_snake_case():
@@ -167,7 +167,7 @@ def test_bold_and_equation_coexist():
 # ── slide placeholders -> image blocks ──────────────────────────────────────
 
 def test_slide_placeholder_becomes_sentinel_block():
-    blocks = markdown_to_blocks("### [02:57] MHA\n\n![slide@02:57]\n\ntext")
+    blocks = markdown_to_blocks("### [02:57] A concept\n\n![slide@02:57]\n\ntext")
     types = [b["type"] for b in blocks]
     assert "_slide" in types
     sentinel = next(b for b in blocks if b["type"] == "_slide")

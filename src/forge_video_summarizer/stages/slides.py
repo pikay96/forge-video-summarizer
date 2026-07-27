@@ -40,12 +40,13 @@ __all__ = [
 
 # Frames are downscaled before being sent to the model. Selection/region judgments need
 # legible layout, not full resolution — and a dozen-plus full-size PNGs make the request
-# payload huge (21 frames of a 914x720 talk = ~6.5 MB base64, which stalls the API call).
+# payload huge (a couple of dozen full-size frames ran to megabytes of base64 and stalled
+# the API call outright).
 _VISION_MAX_WIDTH = 800
 _VISION_JPEG_QUALITY = 70
 # Candidates per selection request. With 20+ images in one call the model under-attends and
-# silently drops good slides (verified: it rejected a complete MHA/MQA/GQA comparison in a
-# 21-image batch, then said "KEEP: Yes" for the very same frame shown alone).
+# silently drops good slides (observed: a complete, important comparison slide was rejected
+# inside a 21-image batch, yet accepted immediately when shown on its own).
 _SELECT_BATCH = 6
 # Post-selection quality correction: a kept frame may be swapped for a nearby candidate
 # that shows the slide better (less caption occlusion, less edge cropping). The window is
@@ -57,13 +58,33 @@ _DUP_MARGIN = 0.01
 # A cropped slide loses information permanently, so it must outweigh a caption that may
 # well be sitting over empty margin.
 _CROP_WEIGHT = 0.5
-# Hard usability floor, applied AFTER the best frame for a slide has been chosen. A frame
-# still failing these is dropped outright — a mutilated screenshot (half a comparison, or a
-# formula with a term behind a subtitle) is worse for the reader than no screenshot.
-# Calibrated on the KV-cache talk, where scores are strongly bimodal: complete frames sit
-# at ~0.09 and zoomed/panned ones at ~0.19-0.25.
-_MAX_CROP = 0.14
-_MAX_CAPTION = 0.05
+# Usability floor for a kept frame, applied AFTER the best frame for a slide has been
+# chosen. A mutilated screenshot (half a comparison, or a formula with a term behind a
+# subtitle) is worse for the reader than no screenshot.
+#
+# These are RELATIVE, not absolute: crop scores depend entirely on a deck's visual style.
+# A full-bleed design whose header/footer bands touch the frame edge by intent scores ~0.26
+# on every frame even when perfectly complete — an absolute cutoff would drop that video's
+# slides wholesale. So the baseline is measured from this video's own candidates.
+#
+# The baseline is the LOWER QUARTILE, not the median. A median assumes most frames are
+# clean, which fails on a heavily zoomed recording where the majority are cropped: on one
+# such talk the median was already 0.185 and a badly cut frame slipped under median+margin.
+# The cleanest quarter of a video's frames is a far better estimate of "what this deck
+# looks like when nothing is cut off".
+#
+# Margin (not ratio): a ratio is undefined when the baseline is 0 (a deck of clean frames)
+# and too permissive when the baseline is high.
+_CROP_OUTLIER_MARGIN = 0.06
+_CAPTION_OUTLIER_MARGIN = 0.03
+
+
+def _baseline(values: list[float]) -> float:
+    """Lower-quartile baseline: what this video looks like at its cleanest."""
+    if not values:
+        return 0.0
+    ordered = sorted(values)
+    return ordered[len(ordered) // 4]
 
 # Matches an inserted placeholder line: ![slide@MM:SS] or ![slide@HH:MM:SS]
 SLIDE_PLACEHOLDER_RE = re.compile(r"!\[slide@(\d{1,2}:\d{2}(?::\d{2})?)\]")
@@ -217,7 +238,7 @@ def select_slide_placements(
 
     Candidates are processed in BATCHES. Sending every frame in one request made the model
     skip genuinely good slides — with 20+ images competing for attention it dropped a
-    complete MHA/MQA/GQA comparison that it enthusiastically kept when shown on its own.
+    important comparison slide that it enthusiastically kept when shown on its own.
     Smaller batches give each frame real consideration; results are merged, and a final
     de-dupe keeps one frame per slide across batch boundaries.
 
@@ -368,14 +389,24 @@ def _prefer_cleaner_duplicates(
 def _reject_unusable_frames(placements: list[dict], candidates: list[SlideCandidate]) -> list[dict]:
     """Drop kept slides whose best available frame is still badly cropped or obscured.
 
-    A mutilated screenshot is worse than no screenshot: it shows the reader half a
-    comparison or a formula with a term hidden behind a subtitle. The model is told to
-    reject these, but it judges cropping unreliably by eye, so we enforce a hard floor in
-    code after `_prefer_cleaner_duplicates` has already picked the best frame available.
-    Only frames that are still bad AFTER that search are dropped.
+    A mutilated screenshot is worse than no screenshot. The model is told to reject these
+    but judges cropping unreliably by eye, so we enforce it in code after
+    `_prefer_cleaner_duplicates` has already picked the best frame available.
+
+    Thresholds are derived FROM THIS VIDEO, not hardcoded: every deck has its own baseline
+    (a full-bleed design touches the frame edge on every slide by intent). We take the
+    lower-quartile score across this video's candidates — what the deck looks like at its
+    cleanest — and drop frames exceeding it by a margin. A uniformly clean deck keeps
+    everything, and a uniformly full-bleed deck is not wiped out.
     """
-    kept: list[dict] = []
+    if not placements or not candidates:
+        return placements
     by_label = {format_ts(c.timestamp): c for c in candidates}
+    crops = [_edge_crop_score(c.path) for c in candidates]
+    captions = [_caption_score(c.path) for c in candidates]
+    crop_limit = _baseline(crops) + _CROP_OUTLIER_MARGIN
+    caption_limit = _baseline(captions) + _CAPTION_OUTLIER_MARGIN
+    kept: list[dict] = []
     for p in placements:
         cand = by_label.get(p["slide"])
         if cand is None:
@@ -383,10 +414,10 @@ def _reject_unusable_frames(placements: list[dict], candidates: list[SlideCandid
             continue
         crop = _edge_crop_score(cand.path)
         caption = _caption_score(cand.path)
-        if crop > _MAX_CROP or caption > _MAX_CAPTION:
+        if crop > crop_limit or caption > caption_limit:
             log.info(
-                "slide %s dropped as unusable (crop %.4f, caption %.4f)",
-                p["slide"], crop, caption,
+                "slide %s dropped as unusable (crop %.4f > %.4f or caption %.4f > %.4f)",
+                p["slide"], crop, crop_limit, caption, caption_limit,
             )
             continue
         kept.append(p)

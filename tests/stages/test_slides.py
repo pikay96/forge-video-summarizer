@@ -28,9 +28,9 @@ Quick point [09:99] that must never receive a slide.
 
 Every step reuses past keys and values [00:06], so they are cached.
 
-### MHA vs MQA vs GQA
+### Comparing the three variants
 
-MQA shares one KV set across heads [02:57], while GQA groups them [04:32].
+The second variant shares one set [02:57], while the third groups them [04:32].
 
 ### The final formula
 
@@ -284,13 +284,20 @@ def test_prefer_cleaner_duplicates_keeps_unknown_labels(tmp_path):
 # ── unusable frames are dropped rather than shipped mutilated ───────────────
 
 def test_reject_unusable_drops_heavily_cropped(tmp_path):
+    """Thresholds are relative to the video, so an outlier needs a deck to stand out from."""
     from forge_video_summarizer.stages.frames import SlideCandidate
     from forge_video_summarizer.stages.slides import _reject_unusable_frames
 
+    deck = [
+        SlideCandidate(timestamp=float(i * 30), path=_img(tmp_path / f"slide_{i}.png"))
+        for i in range(4)
+    ]
     cropped = SlideCandidate(
         timestamp=315.0, path=_img(tmp_path / "slide_05-15.png", edge_ink=True)
     )
-    out = _reject_unusable_frames([{"slide": "05:15", "section": "04:54"}], [cropped])
+    out = _reject_unusable_frames(
+        [{"slide": "05:15", "section": "04:54"}], [*deck, cropped]
+    )
     assert out == []  # better no screenshot than half a slide
 
 
@@ -307,12 +314,17 @@ def test_reject_unusable_drops_caption_over_content(tmp_path):
     from forge_video_summarizer.stages.frames import SlideCandidate
     from forge_video_summarizer.stages.slides import _reject_unusable_frames
 
-    # a wide caption band covering a busy region scores well above _MAX_CAPTION
+    deck = [
+        SlideCandidate(timestamp=float(i * 30), path=_img(tmp_path / f"c_{i}.png"))
+        for i in range(4)
+    ]
     obscured = SlideCandidate(
         timestamp=315.0,
         path=_img(tmp_path / "slide_05-15.png", bar=(5, 110, 195, 145)),
     )
-    out = _reject_unusable_frames([{"slide": "05:15", "section": "04:54"}], [obscured])
+    out = _reject_unusable_frames(
+        [{"slide": "05:15", "section": "04:54"}], [*deck, obscured]
+    )
     assert out == []
 
 
@@ -320,3 +332,44 @@ def test_reject_unusable_keeps_unknown_labels(tmp_path):
     from forge_video_summarizer.stages.slides import _reject_unusable_frames
     pl = [{"slide": "09:99", "section": "04:54"}]
     assert _reject_unusable_frames(pl, []) == pl
+
+
+def test_reject_unusable_adapts_to_a_full_bleed_deck(tmp_path):
+    """A deck whose slides touch the frame edge BY DESIGN must not be wiped out.
+
+    This is why the thresholds are relative: an absolute cutoff calibrated on one video's
+    visual style silently drops every screenshot of a differently-styled one.
+    """
+    from PIL import Image, ImageDraw
+
+    from forge_video_summarizer.stages.frames import SlideCandidate
+    from forge_video_summarizer.stages.slides import _reject_unusable_frames
+
+    def full_bleed(name):
+        im = Image.new("RGB", (200, 150), (255, 255, 255))
+        d = ImageDraw.Draw(im)
+        d.rectangle((0, 0, 200, 20), fill=(20, 80, 160))    # header touches the edge
+        d.rectangle((0, 130, 200, 150), fill=(20, 80, 160))  # footer too
+        d.rectangle((70, 60, 130, 95), fill=(60, 60, 60))
+        p = tmp_path / name
+        im.save(p)
+        return p
+
+    deck = [
+        SlideCandidate(timestamp=float(i * 30), path=full_bleed(f"fb_{i}.png"))
+        for i in range(5)
+    ]
+    pl = [{"slide": f"{i * 30 // 60:02d}:{i * 30 % 60:02d}", "section": "x"} for i in range(5)]
+    assert len(_reject_unusable_frames(pl, deck)) == 5  # nothing dropped
+
+
+def test_baseline_uses_the_clean_quarter_not_the_median():
+    """On a mostly-cropped recording the median is itself high; the lower quartile isn't."""
+    import statistics
+
+    from forge_video_summarizer.stages.slides import _baseline
+
+    mostly_bad = [0.09, 0.09, 0.09, 0.20, 0.21, 0.22, 0.23, 0.24]
+    assert _baseline(mostly_bad) < statistics.median(mostly_bad)
+    assert _baseline(mostly_bad) == 0.09  # sits in the clean quarter
+    assert _baseline([]) == 0.0
