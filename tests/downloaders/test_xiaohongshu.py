@@ -83,6 +83,7 @@ def test_can_handle():
     dl = XiaohongshuDownloader()
     assert dl.can_handle("https://www.xiaohongshu.com/explore/x?xsec_token=Y")
     assert dl.can_handle("https://xhslink.com/a/abc")
+    assert dl.can_handle("http://xhslink.cn/o/18waiYCCxj5")  # app share domain + /o/ path
     assert dl.can_handle("https://www.rednote.com/explore/x")
     assert not dl.can_handle("https://www.bilibili.com/video/BV1")
     assert not dl.can_handle("")

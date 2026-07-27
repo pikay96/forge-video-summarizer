@@ -41,7 +41,8 @@ _VIDEO_CDN = "https://sns-video-bd.xhscdn.com/"
 
 # URL shapes we recognize (xiaohongshu.com and its rednote.com mirror).
 _HOST_RE = re.compile(r"(?:xiaohongshu\.com|rednote\.com)", re.I)
-_SHORT_RE = re.compile(r"https?://xhslink\.com/\S+", re.I)
+# Short links: xhslink.com (web share) and xhslink.cn (app share, /o/ or /a/ paths).
+_SHORT_RE = re.compile(r"https?://xhslink\.c(?:om|n)/\S+", re.I)
 _ID_RE = re.compile(r"(?:explore|item|discovery/item)/([0-9a-zA-Z]+)")
 # window.__INITIAL_STATE__={...};  (greedy to the matching close before </script>)
 _STATE_RE = re.compile(
