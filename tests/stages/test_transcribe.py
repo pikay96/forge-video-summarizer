@@ -8,7 +8,9 @@ import requests
 from forge_video_summarizer.errors import AudioTooLongError, TranscriptionError
 from forge_video_summarizer.stages.transcribe import (
     _build_definition,
+    _chunk_count,
     _split_sentences,
+    _stitch_payloads,
     parse_response,
     transcribe_audio,
 )
@@ -139,18 +141,80 @@ def test_transcribe_network_error(config, tmp_path):
         transcribe_audio(audio, config, session=sess)
 
 
-def test_transcribe_rejects_oversized_file(config, tmp_path):
+def test_transcribe_rejects_oversized_single_chunk(config, tmp_path):
+    # A file over the byte limit whose duration doesn't trigger multi-chunk (unknown dur,
+    # tiny byte count) — the per-request size guard still fires.
     audio = tmp_path / "audio.wav"
     audio.write_bytes(b"0123456789")
     with (
         patch("forge_video_summarizer.stages.transcribe.MAX_AUDIO_BYTES", 5),
+        patch("forge_video_summarizer.stages.transcribe._chunk_count", return_value=1),
         pytest.raises(AudioTooLongError, match="MB"),
     ):
         transcribe_audio(audio, config)
 
 
-def test_transcribe_rejects_overlong_duration(config, tmp_path):
+# ── auto-chunking for long audio ────────────────────────────────────────────
+
+def test_chunk_count_by_duration():
+    # 2.1 h at the WAV byte rate; over the 2 h * 0.9 margin -> needs 2 chunks.
+    from pathlib import Path
+    with patch.object(Path, "stat") as st:
+        st.return_value = MagicMock(st_size=100)
+        assert _chunk_count(Path("x.wav"), duration=2.1 * 3600) == 2
+        assert _chunk_count(Path("x.wav"), duration=30 * 60) == 1  # short -> 1
+        assert _chunk_count(Path("x.wav"), duration=5 * 3600) == 3  # 5 h -> 3
+
+
+def test_stitch_payloads_concatenates_full_timeline():
+    a = {"combinedPhrases": [{"text": "前半段。"}], "phrases": [{"locale": "zh-CN"}]}
+    b = {"combinedPhrases": [{"text": "后半段。"}]}
+    merged = _stitch_payloads([a, b], total_dur=7512.0, locale="zh-CN")
+    assert merged["combinedPhrases"][0]["text"] == "前半段。 后半段。"
+    assert merged["durationMilliseconds"] == 7512000
+    assert merged["phrases"][0]["offsetMilliseconds"] == 0
+    assert merged["phrases"][0]["locale"] == "zh-CN"
+
+
+def test_transcribe_auto_chunks_long_audio(config, tmp_path):
     audio = tmp_path / "audio.wav"
     audio.write_bytes(b"x")
-    with pytest.raises(AudioTooLongError, match="h,"):
-        transcribe_audio(audio, config, duration=3 * 60 * 60)
+    # Two chunks, each returning its own MAI phrase; stitched into one transcript.
+    chunk_a = {"durationMilliseconds": 20000, "combinedPhrases": [{"text": "第一段。开头。"}],
+               "phrases": [{"offsetMilliseconds": 0, "durationMilliseconds": 20000,
+                            "locale": "zh-CN", "text": "第一段。开头。"}]}
+    chunk_b = {"durationMilliseconds": 20000, "combinedPhrases": [{"text": "第二段。结尾。"}],
+               "phrases": [{"offsetMilliseconds": 0, "durationMilliseconds": 20000,
+                            "locale": "zh-CN", "text": "第二段。结尾。"}]}
+    sess = MagicMock()
+    resp_a, resp_b = MagicMock(), MagicMock()
+    resp_a.status_code = resp_b.status_code = 200
+    resp_a.json.return_value, resp_b.json.return_value = chunk_a, chunk_b
+    sess.post.side_effect = [resp_a, resp_b]
+
+    with (
+        patch("forge_video_summarizer.stages.transcribe._chunk_count", return_value=2),
+        patch("forge_video_summarizer.stages.transcribe._split_audio",
+              return_value=[tmp_path / "c0.wav", tmp_path / "c1.wav"]) as split,
+    ):
+        (tmp_path / "c0.wav").write_bytes(b"a")
+        (tmp_path / "c1.wav").write_bytes(b"b")
+        t = transcribe_audio(audio, config, duration=7512.0, session=sess)
+
+    split.assert_called_once()
+    assert sess.post.call_count == 2  # one request per chunk
+    # stitched: text from both chunks, anchors spanning the full timeline
+    assert "第一段" in t.full_text and "第二段" in t.full_text
+    assert t.segments[0].start == pytest.approx(0.0)
+    assert t.segments[-1].end == pytest.approx(7512.0, abs=1.0)
+
+
+def test_transcribe_chunking_needs_ffmpeg(config, tmp_path):
+    audio = tmp_path / "audio.wav"
+    audio.write_bytes(b"x")
+    with (
+        patch("forge_video_summarizer.stages.transcribe._chunk_count", return_value=2),
+        patch("forge_video_summarizer.stages.transcribe.shutil.which", return_value=None),
+        pytest.raises(TranscriptionError, match="ffmpeg is unavailable"),
+    ):
+        transcribe_audio(audio, config, duration=7512.0, session=MagicMock())
