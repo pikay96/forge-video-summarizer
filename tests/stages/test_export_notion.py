@@ -121,6 +121,49 @@ def test_bare_dollar_amounts_not_treated_as_equations():
     assert all(s["type"] == "text" for s in spans)
 
 
+# ── bold / italic inline markdown -> Notion annotations ─────────────────────
+
+def _ann_tags(spans):
+    out = []
+    for s in spans:
+        if s["type"] != "text":
+            out.append(("eq", s["equation"]["expression"]))
+            continue
+        a = s.get("annotations", {})
+        tag = "b" if a.get("bold") else "i" if a.get("italic") else "c" if a.get("code") else "-"
+        out.append((tag, s["text"]["content"]))
+    return out
+
+
+def test_bold_at_line_start_then_cjk():
+    # exact shape from the report: **X（...)**介于... and list "**MQA** 是..."
+    b = markdown_to_blocks("**Grouped-Query Attention（GQA）**介于 MHA 之间。")
+    tags = _ann_tags(b[0]["paragraph"]["rich_text"])
+    assert tags[0] == ("b", "Grouped-Query Attention（GQA）")
+    assert tags[1][0] == "-" and "介于" in tags[1][1]
+
+
+def test_bold_in_list_item():
+    b = markdown_to_blocks("- **GQA** 则处于两者之间。")
+    tags = _ann_tags(b[0]["bulleted_list_item"]["rich_text"])
+    assert tags[0] == ("b", "GQA")
+
+
+def test_italic_but_not_multiplication_or_snake_case():
+    b = markdown_to_blocks("这是 *斜体*，但 2 * n * d 和 d_head 不是。")
+    tags = _ann_tags(b[0]["paragraph"]["rich_text"])
+    assert ("i", "斜体") in tags
+    # the "* n *" multiplication and snake_case must NOT produce italic spans
+    assert not any(t == "i" and text != "斜体" for t, text in tags)
+
+
+def test_bold_and_equation_coexist():
+    b = markdown_to_blocks(r"**结论**：显存为 $2nd$。")
+    tags = _ann_tags(b[0]["paragraph"]["rich_text"])
+    assert ("b", "结论") in tags
+    assert ("eq", "2nd") in tags
+
+
 # ── export_summary (mocked notion-client) ───────────────────────────────────
 
 def _fake_client(existing_children=None):

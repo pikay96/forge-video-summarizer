@@ -39,18 +39,31 @@ NOTION_BLOCK_LIMIT = 100  # max blocks per children.append request
 
 _FENCE_RE = re.compile(r"^```(\w*)\s*$")
 _INLINE_CODE_RE = re.compile(r"`([^`]+)`")
-# Inline segments: code `x`, equation \( x \), or equation $x$ (single-$, no spaces at edges).
+# Inline segments, matched in priority order: code `x` and equations \(x\)/$x$ are
+# LITERAL (no formatting inside); then **bold**/__bold__ and *italic*/_italic_.
 _INLINE_SEG_RE = re.compile(
     r"`(?P<code>[^`]+)`"
     r"|\\\((?P<eqp>.+?)\\\)"
     r"|(?<![\\$])\$(?P<eqd>(?=\S)[^$\n]+?(?<=\S))\$(?!\$)"
+    r"|\*\*(?P<bold>.+?)\*\*"
+    r"|__(?P<bold2>.+?)__"
+    r"|(?<![\w*])\*(?P<ital>\S(?:[^*\n]*?\S)?)\*(?![\w*])"
+    r"|(?<![\w_])_(?P<ital2>\S(?:[^_\n]*?\S)?)_(?![\w_])"
 )
 
 
-def _text_span(content: str, *, code: bool = False) -> dict:
+def _text_span(content: str, *, code: bool = False, bold: bool = False,
+               italic: bool = False) -> dict:
     span: dict[str, Any] = {"type": "text", "text": {"content": content}}
+    ann = {}
     if code:
-        span["annotations"] = {"code": True}
+        ann["code"] = True
+    if bold:
+        ann["bold"] = True
+    if italic:
+        ann["italic"] = True
+    if ann:
+        span["annotations"] = ann
     return span
 
 
@@ -59,9 +72,9 @@ def _equation_span(expr: str) -> dict:
 
 
 def _rich_text(text: str) -> list[dict]:
-    """Build rich_text spans, honoring inline code (`x`) and inline equations
-    (\\(x\\) or $x$ -> Notion equation spans). `[MM:SS]` anchors stay plain text
-    (bilibili ignores ?t= deep links)."""
+    """Build rich_text spans, honoring inline code (`x`), inline equations
+    (\\(x\\) or $x$ -> Notion equation spans), and **bold**/*italic* markdown.
+    `[MM:SS]` anchors stay plain text (bilibili ignores ?t= deep links)."""
     spans: list[dict] = []
     pos = 0
     for m in _INLINE_SEG_RE.finditer(text):
@@ -69,8 +82,12 @@ def _rich_text(text: str) -> list[dict]:
             spans.append(_text_span(text[pos : m.start()]))
         if m.group("code") is not None:
             spans.append(_text_span(m.group("code"), code=True))
+        elif (eq := m.group("eqp") or m.group("eqd")) is not None:
+            spans.append(_equation_span(eq))
+        elif (b := m.group("bold") or m.group("bold2")) is not None:
+            spans.append(_text_span(b, bold=True))
         else:
-            spans.append(_equation_span(m.group("eqp") or m.group("eqd")))
+            spans.append(_text_span(m.group("ital") or m.group("ital2"), italic=True))
         pos = m.end()
     if pos < len(text):
         spans.append(_text_span(text[pos:]))
