@@ -89,6 +89,38 @@ def test_heading_timestamp_is_plain_text():
     assert "".join(s["text"]["content"] for s in spans) == "[00:00] Intro"
 
 
+# ── LaTeX equations -> Notion equation blocks/spans ─────────────────────────
+
+def test_block_equation_bracket_delimiters_multiline():
+    md = "推导：\n\n\\[\n\\text{KV}=2 \\times n \\times L\n\\]\n\n完成。"
+    blocks = markdown_to_blocks(md)
+    types = [b["type"] for b in blocks]
+    assert types == ["paragraph", "equation", "paragraph"]
+    assert blocks[1]["equation"]["expression"] == "\\text{KV}=2 \\times n \\times L"
+
+
+def test_block_equation_single_line_both_delimiters():
+    for md in ("\\[E=mc^2\\]", "$$E=mc^2$$"):
+        blocks = markdown_to_blocks(md)
+        assert blocks[0]["type"] == "equation"
+        assert blocks[0]["equation"]["expression"] == "E=mc^2"
+
+
+def test_inline_equations_become_equation_spans():
+    blocks = markdown_to_blocks(r"当 \(H_{KV}=8\) 且 $B=1$ 时。")
+    spans = blocks[0]["paragraph"]["rich_text"]
+    eqs = [s["equation"]["expression"] for s in spans if s["type"] == "equation"]
+    assert eqs == ["H_{KV}=8", "B=1"]
+    # surrounding prose survives as text spans
+    assert any(s["type"] == "text" and "当" in s["text"]["content"] for s in spans)
+
+
+def test_bare_dollar_amounts_not_treated_as_equations():
+    blocks = markdown_to_blocks("花了 $5 和 $10 元。")
+    spans = blocks[0]["paragraph"]["rich_text"]
+    assert all(s["type"] == "text" for s in spans)
+
+
 # ── export_summary (mocked notion-client) ───────────────────────────────────
 
 def _fake_client(existing_children=None):

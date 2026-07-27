@@ -39,6 +39,12 @@ NOTION_BLOCK_LIMIT = 100  # max blocks per children.append request
 
 _FENCE_RE = re.compile(r"^```(\w*)\s*$")
 _INLINE_CODE_RE = re.compile(r"`([^`]+)`")
+# Inline segments: code `x`, equation \( x \), or equation $x$ (single-$, no spaces at edges).
+_INLINE_SEG_RE = re.compile(
+    r"`(?P<code>[^`]+)`"
+    r"|\\\((?P<eqp>.+?)\\\)"
+    r"|(?<![\\$])\$(?P<eqd>(?=\S)[^$\n]+?(?<=\S))\$(?!\$)"
+)
 
 
 def _text_span(content: str, *, code: bool = False) -> dict:
@@ -48,15 +54,23 @@ def _text_span(content: str, *, code: bool = False) -> dict:
     return span
 
 
+def _equation_span(expr: str) -> dict:
+    return {"type": "equation", "equation": {"expression": expr.strip()}}
+
+
 def _rich_text(text: str) -> list[dict]:
-    """Build rich_text spans, honoring inline code (`x`). `[MM:SS]` anchors stay
-    plain text (bilibili ignores ?t= deep links)."""
+    """Build rich_text spans, honoring inline code (`x`) and inline equations
+    (\\(x\\) or $x$ -> Notion equation spans). `[MM:SS]` anchors stay plain text
+    (bilibili ignores ?t= deep links)."""
     spans: list[dict] = []
     pos = 0
-    for m in _INLINE_CODE_RE.finditer(text):
+    for m in _INLINE_SEG_RE.finditer(text):
         if m.start() > pos:
             spans.append(_text_span(text[pos : m.start()]))
-        spans.append(_text_span(m.group(1), code=True))
+        if m.group("code") is not None:
+            spans.append(_text_span(m.group("code"), code=True))
+        else:
+            spans.append(_equation_span(m.group("eqp") or m.group("eqd")))
         pos = m.end()
     if pos < len(text):
         spans.append(_text_span(text[pos:]))
@@ -75,6 +89,14 @@ def _heading(level: int, text: str) -> dict:
 def _list_item(kind: str, text: str) -> dict:
     key = "bulleted_list_item" if kind == "ul" else "numbered_list_item"
     return {"type": key, key: {"rich_text": _rich_text(text)}}
+
+
+def _equation_block(expr: str) -> dict:
+    return {"type": "equation", "equation": {"expression": expr.strip()}}
+
+
+# Block equation delimiters: \[ ... \] or $$ ... $$ (whole line = one equation block).
+_BLOCK_EQ_INLINE = re.compile(r"^\\\[\s*(.*?)\s*\\\]$|^\$\$\s*(.*?)\s*\$\$$")
 
 
 def markdown_to_blocks(markdown: str) -> list[dict]:
@@ -101,6 +123,28 @@ def markdown_to_blocks(markdown: str) -> list[dict]:
                     "rich_text": [_text_span("\n".join(code_lines))],
                 },
             })
+            continue
+
+        # Block equation on a single line: \[ ... \] or $$ ... $$
+        if m := _BLOCK_EQ_INLINE.match(stripped):
+            expr = m.group(1) if m.group(1) is not None else m.group(2)
+            if expr:
+                blocks.append(_equation_block(expr))
+                i += 1
+                continue
+
+        # Block equation spanning lines: opener \[ or $$, body, closer \] or $$
+        if stripped in ("\\[", "$$"):
+            closer = "\\]" if stripped == "\\[" else "$$"
+            eq_lines: list[str] = []
+            i += 1
+            while i < len(lines) and lines[i].strip() != closer:
+                eq_lines.append(lines[i])
+                i += 1
+            i += 1  # skip closer
+            expr = "\n".join(eq_lines).strip()
+            if expr:
+                blocks.append(_equation_block(expr))
             continue
 
         if not stripped:
