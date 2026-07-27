@@ -7,14 +7,21 @@ stage finds the distinct slides shown in the video and picks a clean frame for e
      Slide transitions produce a scene cut; so do mid-slide animations.
   2. Dedup: cluster candidates that are close in time (an animated slide re-triggers
      several cuts); keep ONE representative per cluster.
-  3. Caption-aware pick: within each cluster's window, sample several frames and choose
-     the one with the LEAST on-screen subtitle (a bright caption bar in the bottom strip),
-     falling back to the cluster frame. Full frame, original aspect ratio, no crop — the
-     webcam corner is intentionally left in.
+  3. Gap backstop: soft/animated slide transitions can score BELOW the threshold, leaving
+     long stretches with no candidate at all (a real slide can hide there). Any gap longer
+     than `_MAX_GAP_SECONDS` is filled with evenly-spaced extra samples. Recall first —
+     the vision model is the quality gate and prunes what isn't useful.
+  4. Caption-aware pick: within each slide's window, sample several frames and choose the
+     one with the LEAST on-screen subtitle (bright caption bar in the bottom strip).
+  5. Cleanup (`apply_cleanup`): remove overlays that aren't slide content — the presenter's
+     webcam bubble (which can sit in ANY corner and moves between videos) and browser/app
+     chrome (tabs, URL bar). These regions are reported by the VISION MODEL in
+     `slides.py` — it already looks at every candidate, so it identifies them far more
+     reliably than pixel heuristics, which break across dark/light slide backgrounds.
+     The webcam patch is filled with the ring-median colour so it blends into the slide.
 
-The model (Stage 4b `slides.py`) then decides which of these candidates are actually key
-slides and which walkthrough section each belongs to. This stage only PRODUCES candidates;
-it makes no keep/drop judgment itself.
+The model (Stage 4b `slides.py`) then decides which candidates are actually key slides and
+where each belongs. This stage only PRODUCES candidates; it makes no keep/drop judgment.
 """
 
 from __future__ import annotations
@@ -22,18 +29,34 @@ from __future__ import annotations
 import logging
 import re
 import shutil
+import statistics
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
 log = logging.getLogger(__name__)
 
-__all__ = ["SlideCandidate", "detect_slide_candidates", "format_ts", "SCENE_THRESHOLD"]
+__all__ = [
+    "SlideCandidate",
+    "detect_slide_candidates",
+    "apply_cleanup",
+    "format_ts",
+    "SCENE_THRESHOLD",
+]
 
-SCENE_THRESHOLD = 0.4  # ffmpeg scene score cut (0-1); higher = fewer, cleaner cuts
+# Scene score cut (0-1). Deliberately permissive: soft/animated slide changes score low,
+# and a missed slide can never be recovered downstream, while extra candidates are cheap
+# (the vision model prunes them).
+SCENE_THRESHOLD = 0.27
 _MIN_GAP_SECONDS = 8.0  # candidates closer than this collapse into one slide cluster
-_CAPTION_SAMPLES = 5  # frames sampled per cluster window to find a caption-free one
+_MAX_GAP_SECONDS = 45.0  # longer stretches get filled with extra samples (recall backstop)
+_CAPTION_SAMPLES = 5  # frames sampled per slide window to find a caption-free one
 _SHOWINFO_TS = re.compile(r"pts_time:([0-9.]+)")
+
+# Overlay-cleanup tuning (regions come from the vision model; these are sanity bounds)
+_MASK_PAD = 0.03  # pad the detected webcam box by this fraction of the frame
+_MAX_MASK_AREA = 0.20  # refuse to mask more than this share of the frame (safety)
+_CHROME_MAX = 0.25  # only look for UI chrome within the top fraction of the frame
 
 
 @dataclass
@@ -55,6 +78,18 @@ def _require_ffmpeg() -> None:
         raise FileNotFoundError("ffmpeg is required for slide extraction but was not found")
 
 
+def _probe_duration(video: Path) -> float | None:
+    try:
+        out = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1", str(video)],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        return float(out)
+    except (subprocess.CalledProcessError, OSError, ValueError):
+        return None
+
+
 def _scene_timestamps(video: Path, threshold: float) -> list[float]:
     """All scene-change timestamps (seconds) via ffmpeg select+showinfo."""
     cmd = [
@@ -64,15 +99,13 @@ def _scene_timestamps(video: Path, threshold: float) -> list[float]:
     ]
     proc = subprocess.run(cmd, capture_output=True, text=True)
     # showinfo writes to stderr; parse pts_time of each selected frame.
-    times = [float(m) for m in _SHOWINFO_TS.findall(proc.stderr)]
-    return sorted(times)
+    return sorted(float(m) for m in _SHOWINFO_TS.findall(proc.stderr))
 
 
 def _cluster(timestamps: list[float], min_gap: float) -> list[float]:
     """Collapse near-consecutive cuts (mid-slide animations) into one time per slide.
 
     Keep the LAST timestamp of each cluster — by then the slide is fully drawn.
-    Always include t=0 as the opening slide if the first cut is well after the start.
     """
     if not timestamps:
         return []
@@ -83,6 +116,31 @@ def _cluster(timestamps: list[float], min_gap: float) -> list[float]:
         else:
             clusters.append([t])
     return [c[-1] for c in clusters]
+
+
+def _fill_gaps(times: list[float], duration: float | None, max_gap: float) -> list[float]:
+    """Insert evenly-spaced samples wherever consecutive slide times are too far apart.
+
+    Soft transitions can score below the scene threshold, so a real slide may live inside a
+    long quiet stretch with no candidate. This guarantees such a stretch is still sampled.
+    """
+    bounds = [0.0, *times]
+    if duration:
+        bounds.append(duration)
+    filled: list[float] = []
+    for a, b in zip(bounds, bounds[1:], strict=False):
+        filled.append(a)
+        span = b - a
+        if span > max_gap:
+            extra = int(span // max_gap)
+            step = span / (extra + 1)
+            filled.extend(a + step * (i + 1) for i in range(extra))
+    filled.append(bounds[-1])
+    # de-dup / sort, drop anything at/after the very end
+    out = sorted({round(t, 2) for t in filled if t >= 0})
+    if duration:
+        out = [t for t in out if t < duration - 1]
+    return out
 
 
 def _extract_frame(video: Path, t: float, out_path: Path) -> bool:
@@ -112,7 +170,6 @@ def _caption_score(image_path: Path) -> float:
             im = im.convert("RGB")
             w, h = im.size
             strip = im.crop((0, int(h * 0.80), w, h))
-            # downsample for speed; count bright-yellow (hi R, hi G, lo B) pixels
             strip = strip.resize((max(1, strip.width // 4), max(1, strip.height // 4)))
             px = list(strip.getdata())
             if not px:
@@ -123,25 +180,96 @@ def _caption_score(image_path: Path) -> float:
         return 0.0
 
 
+def apply_cleanup(
+    image_path: Path,
+    *,
+    chrome_bottom: float = 0.0,
+    webcam: tuple[float, float, float, float] | None = None,
+) -> bool:
+    """Remove non-slide overlays from a frame, using regions reported by the vision model.
+
+    `chrome_bottom` — fraction of height where top browser/app chrome ends (0 = none);
+    that strip is cropped off. `webcam` — (x0, x1, y0, y1) fractions of the presenter's
+    camera bubble, in ANY corner; it is filled with the median colour of a ring just
+    outside the box so the patch blends into the slide background.
+
+    Edits the PNG in place. Returns True if anything changed. Best-effort: bad/implausible
+    regions are ignored and the original frame is left intact.
+    """
+    try:
+        from PIL import Image, ImageDraw
+    except ImportError:  # pragma: no cover - optional dependency
+        return False
+    try:
+        with Image.open(image_path) as src:
+            im = src.convert("RGB")
+        w, h = im.size
+        changed = False
+
+        if webcam:
+            x0, x1, y0, y1 = webcam
+            if 0 <= x0 < x1 <= 1 and 0 <= y0 < y1 <= 1 \
+                    and (x1 - x0) * (y1 - y0) <= _MAX_MASK_AREA:
+                bx0 = max(0, int(w * (x0 - _MASK_PAD)))
+                bx1 = min(w, int(w * (x1 + _MASK_PAD)))
+                by0 = max(0, int(h * (y0 - _MASK_PAD)))
+                by1 = min(h, int(h * (y1 + _MASK_PAD)))
+                if bx1 > bx0 and by1 > by0:
+                    fill = _ring_median(im, bx0, bx1, by0, by1)
+                    ImageDraw.Draw(im).rectangle((bx0, by0, bx1, by1), fill=fill)
+                    changed = True
+
+        if 0 < chrome_bottom < _CHROME_MAX:
+            cut = int(h * chrome_bottom)
+            if 0 < cut < h - 10:
+                im = im.crop((0, cut, w, h))
+                changed = True
+
+        if changed:
+            im.save(image_path)
+        return changed
+    except Exception:  # noqa: BLE001 - cleanup is additive; never break the pipeline
+        return False
+
+
+def _ring_median(im, bx0: int, bx1: int, by0: int, by1: int) -> tuple[int, int, int]:
+    """Median colour of a ring just outside the box — a robust background estimate that
+    blends the patch on both dark and light slides."""
+    w, h = im.size
+    ring = 12
+    samples = []
+    for yy in range(by0, by1, 6):
+        for xx in (max(0, bx0 - ring), min(w - 1, bx1 + ring)):
+            samples.append(im.getpixel((xx, yy)))
+    for xx in range(bx0, bx1, 6):
+        for yy in (max(0, by0 - ring), min(h - 1, by1 + ring)):
+            samples.append(im.getpixel((xx, yy)))
+    if not samples:
+        return (0, 0, 0)
+    return tuple(  # type: ignore[return-value]
+        int(statistics.median(c[i] for c in samples)) for i in range(3)
+    )
+
+
 def _pick_clean_frame(video: Path, t: float, out_dir: Path) -> Path | None:
     """Pick the least-captioned frame near time t. Samples a few frames from t onward
     (captions are transient — later frames on the same slide are often caption-free)."""
     best_path: Path | None = None
     best_score = float("inf")
     for i in range(_CAPTION_SAMPLES):
-        sample_t = t + i * 1.5  # step forward 1.5s each sample
-        tmp = out_dir / f"_probe_{int(round(sample_t))}.png"
+        sample_t = t + i * 1.5
+        tmp = out_dir / f"_probe_{i}.png"
         if not _extract_frame(video, sample_t, tmp):
             continue
         score = _caption_score(tmp)
         if score < best_score:
             best_score = score
-            if best_path and best_path != tmp:
+            if best_path is not None and best_path != tmp:
                 best_path.unlink(missing_ok=True)
             best_path = tmp
         else:
             tmp.unlink(missing_ok=True)
-        if best_score <= 0.001:  # already clean, stop early
+        if best_score <= 0.001:
             break
     if best_path is None:
         return None
@@ -156,7 +284,10 @@ def detect_slide_candidates(
     *,
     threshold: float = SCENE_THRESHOLD,
 ) -> list[SlideCandidate]:
-    """Detect distinct slides and extract one clean (caption-free) frame per slide.
+    """Detect distinct slides and extract one caption-free frame each.
+
+    Overlay cleanup (webcam mask / chrome crop) happens later, in `slides.py`, using
+    regions the vision model reports — see `apply_cleanup`.
 
     Returns candidates ordered by timestamp. Never raises on a per-frame failure —
     only if ffmpeg itself is missing.
@@ -166,16 +297,18 @@ def detect_slide_candidates(
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    duration = _probe_duration(video)
     scene_ts = _scene_timestamps(video, threshold)
     slide_ts = _cluster(scene_ts, _MIN_GAP_SECONDS)
-    # Ensure the opening slide is represented even if the first cut comes late.
-    if not slide_ts or slide_ts[0] > _MIN_GAP_SECONDS:
-        slide_ts = [0.0, *slide_ts]
+    slide_ts = _fill_gaps(slide_ts, duration, _MAX_GAP_SECONDS)
 
     candidates: list[SlideCandidate] = []
     for t in slide_ts:
         frame = _pick_clean_frame(video, t, out_dir)
         if frame is not None:
             candidates.append(SlideCandidate(timestamp=t, path=frame))
-    log.info("slide detection: %d scene cuts -> %d slides", len(scene_ts), len(candidates))
+    log.info(
+        "slide detection: %d scene cuts -> %d sampled -> %d frames",
+        len(scene_ts), len(slide_ts), len(candidates),
+    )
     return candidates

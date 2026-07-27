@@ -15,6 +15,7 @@ from .downloaders import get_downloader
 from .errors import DownloadError
 from .models import Transcript, VideoMetadata
 from .stages import (
+    clean_selected_frames,
     detect_slide_candidates,
     export_summary,
     extract_audio,
@@ -143,7 +144,8 @@ class Pipeline:
         return ws.summary_path
 
     def _add_slides(self, ws: Workspace, summary: str) -> str:
-        """Detect slide frames -> model selects + places -> summary with placeholders."""
+        """Detect slide frames -> model selects, places & reports overlay regions ->
+        clean the kept frames -> summary with placeholders."""
         video = ws.find_video()
         if video is None:
             log.warning("no video file for slide extraction; skipping slides")
@@ -152,6 +154,9 @@ class Pipeline:
         if not candidates:
             return summary
         placements = select_slide_placements(candidates, summary, self.config)
+        if not placements:
+            return summary
+        clean_selected_frames(candidates, placements)
         return place_slides(summary, placements)
 
     # ── Stage 5 ─────────────────────────────────────────────────────────

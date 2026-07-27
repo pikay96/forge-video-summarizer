@@ -30,16 +30,33 @@ Produce Markdown with these sections:
 1. Title — the video title.
 2. TL;DR — 2-3 sentences: what the video is and its single core takeaway.
 3. Context / why it matters — brief framing: the problem/topic and who should care.
-4. Walkthrough — sections by meaningful topic shift. Begin each section heading with an
-   inline timestamp anchor in [MM:SS] or [HH:MM:SS] form taken from the transcript.
-   EXPLAIN each idea like a teacher (convey the concept and the reasoning) — do not
-   merely say "the speaker says X". Scale depth with the length of the material.
+4. Walkthrough — the heart of the summary. ORGANIZE IT BY CONCEPT, NOT BY THE CLOCK.
 5. Key takeaways — bullet points the reader should walk away knowing.
 6. Q&A / interview prep — the questions this material answers, each with a concise
    answer, including the probing "why/how" questions an interviewer would ask.
 
-Create one anchor per meaningful topic shift — few for short videos, many for long ones.
-Anchors must reference the original timeline exactly as they appear in the transcript.
+HOW TO WRITE THE WALKTHROUGH — this is what separates a summary from a transcript:
+
+- Each `###` heading names a CONCEPT, MECHANISM, or QUESTION — never a timestamp and never
+  a vague label like "Part 2" or "The speaker continues". Good headings read like a
+  textbook's: "Why generation must cache K and V", "MHA vs MQA vs GQA: the memory/quality
+  trade-off", "Deriving the KV cache formula".
+- Build a LOGICAL progression: set up the problem, develop the idea, then resolve it. A
+  section may pull together material the speaker scattered across different moments, and
+  the order may differ from the video's order when that explains the topic better.
+- EXPLAIN like a teacher: convey the concept and the reasoning behind it, define terms on
+  first use, and make each idea stand on its own. Never narrate ("then the speaker says").
+- Cite timestamps INLINE, as references inside the prose, in `[MM:SS]` or `[HH:MM:SS]` form
+  exactly as they appear in the transcript — e.g. "...so every layer keeps its own K and V
+  [02:18]." Put at least one inline anchor in each section, and add anchors wherever a
+  specific claim, formula, diagram, or example is introduced. Anchors are POINTERS back to
+  the video, not the organizing structure.
+- Scale depth with the material: a short clip needs a few sections, a long talk many more.
+
+COMPLETENESS — do not omit anything that matters. Before finishing, check that every
+important concept, formula (write the math out), comparison, worked example, number, and
+caveat the video presents appears somewhere in the summary. Losing a key comparison or a
+derivation is a failure, even if the prose reads well.
 """
 
 
