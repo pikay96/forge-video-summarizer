@@ -58,6 +58,8 @@ def call_responses_vision(
     instructions: str,
     text: str,
     images: list[tuple[str, str]],
+    *,
+    timeout: float = 300.0,
 ) -> str:
     """Run one multimodal Responses call: a text part + N images.
 
@@ -65,13 +67,18 @@ def call_responses_vision(
     'data:image/...;base64,...' string. The label precedes each image so the model
     can refer to it (we use the slide's [MM:SS] timestamp as the label).
     Verified shape: input=[{role:user, content:[input_text, input_image, ...]}].
+
+    A timeout is enforced: image payloads are large, and a hung request would otherwise
+    stall the whole pipeline indefinitely.
     """
     content: list[dict] = [{"type": "input_text", "text": text}]
     for label, data_url in images:
         content.append({"type": "input_text", "text": label})
         content.append({"type": "input_image", "image_url": data_url})
     try:
-        response = client.responses.create(
+        target = client.with_options(timeout=timeout) if hasattr(client, "with_options") \
+            else client
+        response = target.responses.create(
             model=config.openai_deployment,
             instructions=instructions,
             input=[{"role": "user", "content": content}],

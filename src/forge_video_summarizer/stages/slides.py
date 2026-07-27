@@ -18,6 +18,7 @@ Best-effort throughout: any failure returns the summary unchanged (slides are ad
 from __future__ import annotations
 
 import base64
+import io
 import json
 import logging
 import mimetypes
@@ -37,6 +38,12 @@ __all__ = [
     "select_slide_placements",
     "clean_selected_frames",
 ]
+
+# Frames are downscaled before being sent to the model. Selection/region judgments need
+# legible layout, not full resolution — and a dozen-plus full-size PNGs make the request
+# payload huge (21 frames of a 914x720 talk = ~6.5 MB base64, which stalls the API call).
+_VISION_MAX_WIDTH = 800
+_VISION_JPEG_QUALITY = 70
 
 # Matches an inserted placeholder line: ![slide@MM:SS] or ![slide@HH:MM:SS]
 SLIDE_PLACEHOLDER_RE = re.compile(r"!\[slide@(\d{1,2}:\d{2}(?::\d{2})?)\]")
@@ -75,6 +82,31 @@ If none of the frames are worth keeping, return [].
 
 
 def _data_url(path: Path) -> str | None:
+    """Base64 data URL of the frame, downscaled to keep the request payload sane.
+
+    IMPORTANT: the model reports cleanup regions as FRACTIONS, so downscaling does not
+    affect how those map back onto the full-resolution frame we actually embed.
+    Falls back to the original bytes if Pillow is unavailable.
+    """
+    try:
+        from PIL import Image
+    except ImportError:  # pragma: no cover - optional dependency
+        return _raw_data_url(path)
+    try:
+        with Image.open(path) as im:
+            im = im.convert("RGB")
+            if im.width > _VISION_MAX_WIDTH:
+                ratio = _VISION_MAX_WIDTH / im.width
+                im = im.resize((_VISION_MAX_WIDTH, max(1, int(im.height * ratio))))
+            buf = io.BytesIO()
+            im.save(buf, format="JPEG", quality=_VISION_JPEG_QUALITY)
+        b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+        return f"data:image/jpeg;base64,{b64}"
+    except Exception:  # noqa: BLE001 - fall back to the original file
+        return _raw_data_url(path)
+
+
+def _raw_data_url(path: Path) -> str | None:
     try:
         mime = mimetypes.guess_type(path.name)[0] or "image/png"
         b64 = base64.b64encode(path.read_bytes()).decode("ascii")
