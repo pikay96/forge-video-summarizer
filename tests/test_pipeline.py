@@ -218,3 +218,53 @@ def test_run_all_local_end_to_end(config, tmp_path):
 
     assert result.name == "summary.md"
     assert result.read_text() == "# Final"
+
+
+# ── slides: overlay masking is opt-in ───────────────────────────────────────
+
+def _slides_pipeline(tmp_path, monkeypatch):
+    """Pipeline stub wired so _add_slides runs against fakes."""
+    from forge_video_summarizer import pipeline as pl
+    from forge_video_summarizer.stages.frames import SlideCandidate
+
+    frame = tmp_path / "slide_00-06.png"
+    frame.write_bytes(b"x")
+    cands = [SlideCandidate(timestamp=6.0, path=frame)]
+    placements = [{"slide": "00:06", "section": "00:06", "webcam": (0.8, 0.9, 0.0, 0.2)}]
+
+    monkeypatch.setattr(pl, "detect_slide_candidates", lambda *a, **k: cands)
+    monkeypatch.setattr(pl, "select_slide_placements", lambda *a, **k: placements)
+    monkeypatch.setattr(pl, "place_slides", lambda summary, p: summary + "\n![slide@00:06]")
+    calls: list = []
+    monkeypatch.setattr(pl, "clean_selected_frames", lambda *a, **k: calls.append(a))
+    return cands, calls
+
+
+def test_slides_do_not_mask_overlays_by_default(tmp_path, monkeypatch):
+    from forge_video_summarizer.config import Config
+    from forge_video_summarizer.pipeline import Pipeline
+    from forge_video_summarizer.workspace import Workspace
+
+    _, calls = _slides_pipeline(tmp_path, monkeypatch)
+    p = Pipeline(Config(), output_root=str(tmp_path))
+    ws = Workspace(tmp_path, "T", "BV1")
+    monkeypatch.setattr(Workspace, "find_video", lambda self: tmp_path / "v.mp4")
+
+    out = p._add_slides(ws, "Body [00:06] text.")
+    assert "![slide@00:06]" in out  # screenshot still embedded
+    assert calls == []  # ...but no masking
+
+
+def test_slides_mask_overlays_when_requested(tmp_path, monkeypatch):
+    from forge_video_summarizer.config import Config
+    from forge_video_summarizer.pipeline import Pipeline
+    from forge_video_summarizer.workspace import Workspace
+
+    _, calls = _slides_pipeline(tmp_path, monkeypatch)
+    p = Pipeline(Config(), output_root=str(tmp_path))
+    ws = Workspace(tmp_path, "T", "BV1")
+    monkeypatch.setattr(Workspace, "find_video", lambda self: tmp_path / "v.mp4")
+
+    out = p._add_slides(ws, "Body [00:06] text.", mask_overlays=True)
+    assert "![slide@00:06]" in out
+    assert len(calls) == 1  # cleanup ran

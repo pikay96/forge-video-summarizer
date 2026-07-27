@@ -40,14 +40,14 @@ def build_parser() -> argparse.ArgumentParser:
             p.add_argument(
                 "--export", action="store_true", help="also publish to Notion (Stage 5)"
             )
+        if name in ("summarize", "summarize-transcript"):
             p.add_argument(
                 "--slides", action="store_true",
                 help="extract slide screenshots into the Walkthrough (for slide/PPT talks)",
             )
-        if name == "summarize-transcript":
             p.add_argument(
-                "--slides", action="store_true",
-                help="extract slide screenshots into the Walkthrough (for slide/PPT talks)",
+                "--mask-overlays", action="store_true",
+                help="experimental: mask the webcam / crop app chrome off slide screenshots",
             )
     return parser
 
@@ -66,7 +66,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command == "summarize":
             out = pipeline.run_all(
-                args.source, force=force, export=args.export, slides=args.slides
+                args.source, force=force, export=args.export,
+                slides=args.slides, mask_overlays=args.mask_overlays,
             )
             print(f"Summary written: {out}")
             if args.export:
@@ -84,9 +85,10 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Transcript: {ws.transcript_txt_path}")
         elif args.command == "summarize-transcript":
             ws = _workspace_for(pipeline, args.source, force=force)
-            print(
-                f"Summary written: {pipeline.run_summarize(ws, force=force, slides=args.slides)}"
+            out = pipeline.run_summarize(
+                ws, force=force, slides=args.slides, mask_overlays=args.mask_overlays
             )
+            print(f"Summary written: {out}")
         elif args.command == "export":
             ws = _workspace_for(pipeline, args.source, force=force)
             print(f"Notion page: {pipeline.run_export(ws, force=force)}")
