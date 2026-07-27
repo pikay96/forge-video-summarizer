@@ -5,7 +5,7 @@ function with a file handoff so any stage is re-runnable and cacheable.
 
 ```
 video URL / local file
-   │  hand-written per-site downloader (v1: bilibili)   → video.mp4 + metadata.json
+   │  per-site downloader (bilibili / Xiaohongshu)         → video.mp4 + metadata.json
    ▼
 audio.wav (16 kHz mono)  │  ffmpeg
    │
@@ -48,6 +48,7 @@ If the renderer is absent the pipeline still runs — it just skips the overview
 Copy `.env.example` to `.env` and set:
 
 - `BILI_SESSDATA` — SESSDATA cookie from a logged-in bilibili session (only auth needed).
+- `XHS_COOKIE` — optional Cookie for Xiaohongshu; usually blank (video pages are public).
 - `AZURE_SPEECH_ENDPOINT` / `AZURE_SPEECH_KEY` — Azure Speech (fast transcription).
   `AZURE_SPEECH_MODEL` (optional) sets the enhanced model, default `mai-transcribe-1.5`.
 - `AZURE_OPENAI_ENDPOINT` / `AZURE_OPENAI_API_KEY` / `AZURE_OPENAI_DEPLOYMENT` — summarization.
@@ -79,9 +80,16 @@ Flags: `--output <dir>` (default `output/`), `--force` (ignore cache), `--env <p
 
 ## Stages
 
-1. **Download** — hand-written per-site downloader behind a pluggable interface
-   (v1 = bilibili: SESSDATA auth, `view` → `playurl` DASH → ffmpeg mux). Always keeps
-   the full video (planned visual capability needs it). Rich `metadata.json` sidecar.
+1. **Download** — hand-written per-site downloaders behind a pluggable interface,
+   picked by URL:
+   - **bilibili** — SESSDATA auth, `view` → `playurl` DASH → ffmpeg mux.
+   - **Xiaohongshu / RedNote (小红书)** — resolve `xhslink.com` short links, parse the
+     note page's `__INITIAL_STATE__`, pull the single progressive MP4
+     (`originVideoKey` → CDN, or the highest-res stream). No login required; an optional
+     `XHS_COOKIE` helps if you hit an anti-bot wall. **Video posts only.**
+
+   Always keeps the full video (planned visual capability needs it). Rich `metadata.json`
+   sidecar. Adding a site = one class implementing `Downloader` + a line in the registry.
 2. **Extract audio** — `ffmpeg` → 16 kHz mono PCM WAV (the format the fast-transcription
    endpoint accepts directly). No normalization/trimming (keeps the timeline identical so
    anchors stay accurate).
@@ -126,7 +134,7 @@ src/forge_video_summarizer/
 ├── workspace.py      # per-video dir, title sanitize, artifact paths
 ├── models.py         # VideoMetadata, Transcript, TranscriptSegment
 ├── errors.py         # typed exceptions
-├── downloaders/      # pluggable per-site (base + bilibili + registry)
+├── downloaders/      # pluggable per-site (base + bilibili + xiaohongshu + registry)
 ├── prompts/          # vendored excalidraw specialist instruction (package data)
 └── stages/           # extract, transcribe, summarize, diagram, export_notion
 tests/                # unit tests (network/subprocess/Notion API/renderer mocked)

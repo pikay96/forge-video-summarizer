@@ -15,7 +15,10 @@ __all__ = ["main", "build_parser"]
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="forge-video-summarizer",
-        description="Turn a video (bilibili URL or local file) into a teacher-clear summary.",
+        description=(
+            "Turn a video (bilibili or Xiaohongshu URL, or local file) "
+            "into a teacher-clear summary."
+        ),
     )
     parser.add_argument("--env", default=".env", help="Path to .env (default: .env)")
     parser.add_argument("--output", default="output", help="Output root (default: output)")
@@ -32,7 +35,7 @@ def build_parser() -> argparse.ArgumentParser:
     ]:
         arg = "url" if name == "download" else "source"
         p = sub.add_parser(name, help=help_text)
-        p.add_argument(arg, help="bilibili URL or local video file path")
+        p.add_argument(arg, help="video URL (bilibili or Xiaohongshu) or local video file path")
         if name == "summarize":
             p.add_argument(
                 "--export", action="store_true", help="also publish to Notion (Stage 5)"
