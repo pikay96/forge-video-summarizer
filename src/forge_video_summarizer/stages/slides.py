@@ -44,6 +44,10 @@ __all__ = [
 # payload huge (21 frames of a 914x720 talk = ~6.5 MB base64, which stalls the API call).
 _VISION_MAX_WIDTH = 800
 _VISION_JPEG_QUALITY = 70
+# Candidates per selection request. With 20+ images in one call the model under-attends and
+# silently drops good slides (verified: it rejected a complete MHA/MQA/GQA comparison in a
+# 21-image batch, then said "KEEP: Yes" for the very same frame shown alone).
+_SELECT_BATCH = 6
 
 # Matches an inserted placeholder line: ![slide@MM:SS] or ![slide@HH:MM:SS]
 SLIDE_PLACEHOLDER_RE = re.compile(r"!\[slide@(\d{1,2}:\d{2}(?::\d{2})?)\]")
@@ -59,10 +63,23 @@ also given the summary's timestamp anchors.
 
 TASK 1 — SELECT. Keep ONLY the frames that are genuinely useful KEY slides: ones showing a
 diagram, formula, table, comparison, or structured content that materially helps a reader.
-DROP: near-duplicates of a slide you already kept (keep the single clearest/most complete
-one), transition/blurred/half-drawn frames, frames that are mostly the speaker's webcam, and
+DROP: transition/blurred/half-drawn frames, frames that are mostly the speaker's webcam, and
 near-empty slides. There is no target count — keep as few or as many as truly earn their
 place, but do NOT miss a slide that presents an important concept or comparison.
+
+DE-DUPLICATE BY KEEPING ONE, NEVER BY DROPPING ALL. When several frames show the SAME slide,
+choose exactly ONE — the clearest and most complete — and drop the others. Dropping every
+frame of a slide because they look repetitive is a serious error: that slide then appears
+nowhere in the summary. Before you finish, re-check that every distinct slide topic in the
+candidates is represented by exactly one kept frame.
+
+JUDGE ON CONTENT, NOT ON FRAMING. Talks are often recorded zoomed in or panned, so a slide
+may be cut off at the edges, off-centre, or only partly in view. That is NOT a reason to
+drop it. An imperfectly framed slide carrying important content is far more valuable to the
+reader than no slide at all — keep it. Among several frames of the SAME slide, prefer the
+one showing the most of it; but if every frame of an important slide is cropped, still keep
+the best available one. Reject a frame for being unreadable, blank, or mid-animation —
+never merely for being cropped or zoomed.
 
 TASK 2 — PLACE. For each kept slide, choose the anchor it best illustrates (the point in the
 summary whose topic the slide depicts; usually at or just before the slide's timestamp).
@@ -133,42 +150,64 @@ def select_slide_placements(
     config: Config,
     *,
     client: Any | None = None,
+    batch_size: int = _SELECT_BATCH,
 ) -> list[dict]:
-    """Vision call → list of {"slide": MM:SS, "section": MM:SS} placements (validated).
+    """Vision call(s) → validated placements with per-slide cleanup regions.
 
-    Returns [] on any failure or if the model keeps nothing.
+    Candidates are processed in BATCHES. Sending every frame in one request made the model
+    skip genuinely good slides — with 20+ images competing for attention it dropped a
+    complete MHA/MQA/GQA comparison that it enthusiastically kept when shown on its own.
+    Smaller batches give each frame real consideration; results are merged, and a final
+    de-dupe keeps one frame per slide across batch boundaries.
+
+    Returns [] on total failure or if the model keeps nothing. A failing batch is skipped
+    rather than aborting the rest.
     """
     anchors = _section_anchors(summary_markdown)
     if not candidates or not anchors:
         return []
     client = client or make_client(config)
 
-    images: list[tuple[str, str]] = []
-    slide_labels: set[str] = set()
+    entries: list[tuple[str, str]] = []
     for c in candidates:
         url = _data_url(c.path)
-        if url is None:
-            continue
-        label = format_ts(c.timestamp)
-        slide_labels.add(label)
-        images.append((f"SLIDE {label}", url))
-    if not images:
+        if url is not None:
+            entries.append((format_ts(c.timestamp), url))
+    if not entries:
         return []
 
-    text = (
-        "Walkthrough section anchors (choose from these for 'section'):\n"
-        + ", ".join(anchors)
-        + f"\n\nThere are {len(images)} candidate slide frames below, in order."
+    anchor_set = set(anchors)
+    anchor_text = "Summary timestamp anchors (choose from these for 'section'):\n" + ", ".join(
+        anchors
     )
-    try:
-        reply = call_responses_vision(client, config, _SELECT_INSTRUCTIONS, text, images)
-    except Exception as exc:  # noqa: BLE001 - slides are additive; degrade
-        log.warning("slide selection vision call failed: %s", exc)
-        return []
+    placements: list[dict] = []
+    for start in range(0, len(entries), batch_size):
+        chunk = entries[start : start + batch_size]
+        images = [(f"SLIDE {label}", url) for label, url in chunk]
+        text = (
+            f"{anchor_text}\n\nThere are {len(chunk)} candidate slide frames below, in order"
+            f" (batch {start // batch_size + 1} of"
+            f" {(len(entries) + batch_size - 1) // batch_size})."
+        )
+        try:
+            reply = call_responses_vision(client, config, _SELECT_INSTRUCTIONS, text, images)
+        except Exception as exc:  # noqa: BLE001 - slides are additive; degrade
+            log.warning("slide selection batch starting at %d failed: %s", start, exc)
+            continue
+        placements.extend(_parse_placements(reply, {lbl for lbl, _ in chunk}, anchor_set))
 
-    placements = _parse_placements(reply, slide_labels, set(anchors))
+    placements = _dedupe_placements(placements)
     log.info("slide selection: %d candidates -> %d kept", len(candidates), len(placements))
     return placements
+
+
+def _dedupe_placements(placements: list[dict]) -> list[dict]:
+    """One entry per slide, ordered by timestamp (batches are independent, so a slide could
+    in principle be reported twice)."""
+    seen: dict[str, dict] = {}
+    for p in placements:
+        seen.setdefault(p["slide"], p)
+    return sorted(seen.values(), key=lambda p: p["slide"])
 
 
 def _parse_placements(reply: str, valid_slides: set[str], valid_sections: set[str]) -> list[dict]:

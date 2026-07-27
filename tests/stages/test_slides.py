@@ -9,6 +9,7 @@ from forge_video_summarizer.stages.slides import (
     SLIDE_PLACEHOLDER_RE,
     _clean_box,
     _clean_fraction,
+    _dedupe_placements,
     _parse_placements,
     _section_anchors,
     clean_selected_frames,
@@ -133,6 +134,64 @@ def test_select_slide_placements_happy_path(tmp_path):
     _, _, _, _, images = vc.call_args.args
     assert images and images[0][0] == "SLIDE 02:57"
     assert images[0][1].startswith("data:image/")
+
+
+def _fake_candidates(tmp_path, seconds):
+    out = []
+    for s in seconds:
+        p = tmp_path / f"slide_{s // 60:02d}-{s % 60:02d}.png"
+        p.write_bytes(b"\x89PNG\r\n\x1a\nfake")
+        out.append(SlideCandidate(timestamp=float(s), path=p))
+    return out
+
+
+def test_select_batches_large_candidate_sets(tmp_path):
+    """Every candidate must be shown to the model; too many at once made it drop slides."""
+    cands = _fake_candidates(tmp_path, [6, 57, 177, 272, 315, 328, 411])
+    cfg = Config(openai_endpoint="e", openai_key="k")
+    with patch(
+        "forge_video_summarizer.stages.slides.call_responses_vision", return_value="[]"
+    ) as vc:
+        select_slide_placements(cands, SUMMARY, cfg, client=object(), batch_size=3)
+    assert vc.call_count == 3  # 7 candidates / batch of 3
+    shown = [lbl for call in vc.call_args_list for lbl, _ in call.args[4]]
+    assert len(shown) == 7  # nothing silently skipped
+    assert "SLIDE 05:15" in shown
+
+
+def test_select_merges_results_across_batches(tmp_path):
+    cands = _fake_candidates(tmp_path, [6, 177, 315, 411])
+    cfg = Config(openai_endpoint="e", openai_key="k")
+    replies = [
+        '[{"slide":"00:06","section":"00:06"}]',
+        '[{"slide":"05:15","section":"04:32"}]',
+    ]
+    with patch(
+        "forge_video_summarizer.stages.slides.call_responses_vision", side_effect=replies
+    ):
+        out = select_slide_placements(cands, SUMMARY, cfg, client=object(), batch_size=2)
+    assert [p["slide"] for p in out] == ["00:06", "05:15"]
+
+
+def test_select_survives_a_failing_batch(tmp_path):
+    cands = _fake_candidates(tmp_path, [6, 177, 315, 411])
+    cfg = Config(openai_endpoint="e", openai_key="k")
+    with patch(
+        "forge_video_summarizer.stages.slides.call_responses_vision",
+        side_effect=[RuntimeError("boom"), '[{"slide":"05:15","section":"04:32"}]'],
+    ):
+        out = select_slide_placements(cands, SUMMARY, cfg, client=object(), batch_size=2)
+    assert [p["slide"] for p in out] == ["05:15"]  # good batch still lands
+
+
+def test_dedupe_placements_keeps_one_per_slide():
+    dupes = [
+        {"slide": "05:15", "section": "04:32"},
+        {"slide": "05:15", "section": "06:40"},
+        {"slide": "00:06", "section": "00:06"},
+    ]
+    out = _dedupe_placements(dupes)
+    assert [p["slide"] for p in out] == ["00:06", "05:15"]
 
 
 def test_clean_selected_frames_applies_only_to_kept(tmp_path):
