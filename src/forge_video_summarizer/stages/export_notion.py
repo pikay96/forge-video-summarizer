@@ -39,6 +39,8 @@ NOTION_BLOCK_LIMIT = 100  # max blocks per children.append request
 
 _FENCE_RE = re.compile(r"^```(\w*)\s*$")
 _INLINE_CODE_RE = re.compile(r"`([^`]+)`")
+# Slide placeholder line inserted by stages/slides.py: ![slide@MM:SS] or @HH:MM:SS
+_SLIDE_PLACEHOLDER_RE = re.compile(r"!\[slide@(\d{1,2}:\d{2}(?::\d{2})?)\]")
 # Inline segments, matched in priority order: code `x` and equations \(x\)/$x$ are
 # LITERAL (no formatting inside); then **bold**/__bold__ and *italic*/_italic_.
 _INLINE_SEG_RE = re.compile(
@@ -123,6 +125,13 @@ def markdown_to_blocks(markdown: str) -> list[dict]:
     i = 0
     while i < len(lines):
         stripped = lines[i].strip()
+
+        # Slide screenshot placeholder: ![slide@MM:SS] -> a sentinel resolved at export
+        # time (uploaded + swapped for an image block). Left as a no-op if unresolved.
+        if sm := _SLIDE_PLACEHOLDER_RE.fullmatch(stripped):
+            blocks.append({"type": "_slide", "_slide": {"ts": sm.group(1)}})
+            i += 1
+            continue
 
         fence = _FENCE_RE.match(stripped)
         if fence:
@@ -281,12 +290,35 @@ def _upload_image_block(client: Any, image_path: Path) -> dict | None:
         return None
 
 
+def _resolve_slide_blocks(
+    client: Any, blocks: list[dict], slides_dir: Path | None
+) -> list[dict]:
+    """Replace `_slide` sentinel blocks with uploaded image blocks (captioned with the
+    slide timestamp). Drops the sentinel if the frame is missing or the upload fails."""
+    resolved: list[dict] = []
+    for b in blocks:
+        if b.get("type") != "_slide":
+            resolved.append(b)
+            continue
+        ts = b["_slide"]["ts"]
+        frame = (slides_dir / f"slide_{ts.replace(':', '-')}.png") if slides_dir else None
+        if frame is None or not frame.is_file():
+            log.warning("slide frame for %s not found; skipping placeholder", ts)
+            continue
+        img = _upload_image_block(client, frame)
+        if img is not None:
+            img["image"]["caption"] = [_text_span(f"[{ts}]")]
+            resolved.append(img)
+    return resolved
+
+
 def export_summary(
     summary_markdown: str,
     config: Config,
     *,
     metadata: VideoMetadata | None = None,
     overview_image: Path | None = None,
+    slides_dir: Path | None = None,
     client: Any | None = None,
 ) -> str:
     """Create/update a Notion subpage for this summary. Returns the page URL.
@@ -306,7 +338,10 @@ def export_summary(
     raw_title = metadata.title if metadata else "Video Summary"
     marker_title = _title_with_id(raw_title, video_id)
 
-    all_blocks = _header_blocks(metadata, video_url) + markdown_to_blocks(summary_markdown)
+    body_blocks = markdown_to_blocks(summary_markdown)
+    # Resolve inline slide placeholders -> uploaded image blocks (best-effort).
+    body_blocks = _resolve_slide_blocks(client, body_blocks, slides_dir)
+    all_blocks = _header_blocks(metadata, video_url) + body_blocks
 
     # Overview image at the very top (best-effort upload; skipped on failure).
     if overview_image is not None and Path(overview_image).is_file():

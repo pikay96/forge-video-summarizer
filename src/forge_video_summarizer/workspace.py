@@ -72,6 +72,10 @@ class Workspace:
         return self.dir / "overview.png"
 
     @property
+    def slides_dir(self) -> Path:
+        return self.dir / "slides"
+
+    @property
     def notion_url_path(self) -> Path:
         return self.dir / "notion_url.txt"
 

@@ -50,3 +50,32 @@ def call_responses(client: Any, config: Config, instructions: str, user_input: s
     except Exception as exc:  # noqa: BLE001 - uniform surface for SDK/transport errors
         raise SummarizationError(f"OpenAI request failed: {exc}") from exc
     return extract_output_text(response)
+
+
+def call_responses_vision(
+    client: Any,
+    config: Config,
+    instructions: str,
+    text: str,
+    images: list[tuple[str, str]],
+) -> str:
+    """Run one multimodal Responses call: a text part + N images.
+
+    `images` is a list of (label, data_url) where data_url is a
+    'data:image/...;base64,...' string. The label precedes each image so the model
+    can refer to it (we use the slide's [MM:SS] timestamp as the label).
+    Verified shape: input=[{role:user, content:[input_text, input_image, ...]}].
+    """
+    content: list[dict] = [{"type": "input_text", "text": text}]
+    for label, data_url in images:
+        content.append({"type": "input_text", "text": label})
+        content.append({"type": "input_image", "image_url": data_url})
+    try:
+        response = client.responses.create(
+            model=config.openai_deployment,
+            instructions=instructions,
+            input=[{"role": "user", "content": content}],
+        )
+    except Exception as exc:  # noqa: BLE001 - uniform surface for SDK/transport errors
+        raise SummarizationError(f"OpenAI vision request failed: {exc}") from exc
+    return extract_output_text(response)

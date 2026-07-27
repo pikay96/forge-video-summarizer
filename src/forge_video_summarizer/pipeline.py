@@ -15,10 +15,13 @@ from .downloaders import get_downloader
 from .errors import DownloadError
 from .models import Transcript, VideoMetadata
 from .stages import (
+    detect_slide_candidates,
     export_summary,
     extract_audio,
     generate_overview_image,
+    place_slides,
     probe_duration,
+    select_slide_placements,
     summarize_transcript,
     transcribe_audio,
 )
@@ -109,7 +112,7 @@ class Pipeline:
         return transcript
 
     # ── Stage 4 ─────────────────────────────────────────────────────────
-    def run_summarize(self, ws: Workspace, *, force: bool = False) -> Path:
+    def run_summarize(self, ws: Workspace, *, force: bool = False, slides: bool = False) -> Path:
         if Workspace.should_skip(ws.summary_path, force):
             return ws.summary_path
 
@@ -118,7 +121,6 @@ class Pipeline:
         )
         metadata = self._read_metadata(ws)
         summary = summarize_transcript(transcript, self.config, metadata=metadata)
-        ws.summary_path.write_text(summary, "utf-8")
 
         # Overview image (always-on): a dedicated second pass renders an Excalidraw scene
         # to overview.png, embedded at the top of the Notion page on export. Best-effort —
@@ -128,7 +130,29 @@ class Pipeline:
         except Exception as exc:  # noqa: BLE001 - overview is additive, degrade gracefully
             log.warning("overview image step failed, continuing without it: %s", exc)
 
+        # Slide screenshots (opt-in --slides): extract candidate slide frames, let the
+        # vision model pick the key ones + assign each to a Walkthrough section, and insert
+        # ![slide@MM:SS] placeholders into the summary. Best-effort — never blocks.
+        if slides:
+            try:
+                summary = self._add_slides(ws, summary)
+            except Exception as exc:  # noqa: BLE001 - slides are additive, degrade
+                log.warning("slide step failed, continuing without slides: %s", exc)
+
+        ws.summary_path.write_text(summary, "utf-8")
         return ws.summary_path
+
+    def _add_slides(self, ws: Workspace, summary: str) -> str:
+        """Detect slide frames -> model selects + places -> summary with placeholders."""
+        video = ws.find_video()
+        if video is None:
+            log.warning("no video file for slide extraction; skipping slides")
+            return summary
+        candidates = detect_slide_candidates(video, ws.slides_dir)
+        if not candidates:
+            return summary
+        placements = select_slide_placements(candidates, summary, self.config)
+        return place_slides(summary, placements)
 
     # ── Stage 5 ─────────────────────────────────────────────────────────
     def run_export(self, ws: Workspace, *, force: bool = False) -> str:
@@ -140,21 +164,28 @@ class Pipeline:
         summary = ws.summary_path.read_text("utf-8")
         metadata = self._read_metadata(ws)
         overview = ws.overview_image_path if ws.overview_image_path.is_file() else None
-        url = export_summary(summary, self.config, metadata=metadata, overview_image=overview)
+        slides_dir = ws.slides_dir if ws.slides_dir.is_dir() else None
+        url = export_summary(
+            summary, self.config, metadata=metadata,
+            overview_image=overview, slides_dir=slides_dir,
+        )
         ws.notion_url_path.write_text(url, "utf-8")
         return url
 
     # ── End-to-end ──────────────────────────────────────────────────────
-    def run_all(self, source: str, *, force: bool = False, export: bool = False) -> Path:
+    def run_all(
+        self, source: str, *, force: bool = False, export: bool = False, slides: bool = False
+    ) -> Path:
         """Full pipeline: source (URL or local file) -> summary.md path.
-        When export=True, also publishes to Notion (Stage 5)."""
+        When export=True, also publishes to Notion (Stage 5).
+        When slides=True, extracts slide screenshots into the Walkthrough."""
         if _looks_like_url(source):
             ws = self.run_download(source, force=force)
         else:
             ws = self.workspace_for_local(source)
         self.run_extract(ws, force=force)
         self.run_transcribe(ws, force=force)
-        summary_path = self.run_summarize(ws, force=force)
+        summary_path = self.run_summarize(ws, force=force, slides=slides)
         if export:
             self.run_export(ws, force=force)
         return summary_path

@@ -102,6 +102,11 @@ Flags: `--output <dir>` (default `output/`), `--force` (ignore cache), `--env <p
    length scales with duration, one `[MM:SS]` anchor per meaningful topic shift. Then a
    **dedicated second pass** authors an **Excalidraw overview image** from the finished
    summary and renders it to `overview.png` (see below).
+   - **Optional `--slides`** (for slide/PPT-style talks): scene-detect distinct slides,
+     pick a clean caption-free frame for each, and let the vision model choose the KEY
+     slides and place each under the matching Walkthrough section (as `![slide@MM:SS]`).
+     Real slide screenshots embedded inline — kept *in addition to* the overview image.
+     Best-effort; never blocks the summary.
 5. **Export** — publishes `summary.md` to Notion as a **subpage** of a configured parent
    page (official `notion-client` SDK). Each page carries the **overview image** (uploaded
    via Notion `file_uploads`) at the top, an embedded bilibili video, a metadata callout,

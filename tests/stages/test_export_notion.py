@@ -164,6 +164,49 @@ def test_bold_and_equation_coexist():
     assert ("eq", "2nd") in tags
 
 
+# ── slide placeholders -> image blocks ──────────────────────────────────────
+
+def test_slide_placeholder_becomes_sentinel_block():
+    blocks = markdown_to_blocks("### [02:57] MHA\n\n![slide@02:57]\n\ntext")
+    types = [b["type"] for b in blocks]
+    assert "_slide" in types
+    sentinel = next(b for b in blocks if b["type"] == "_slide")
+    assert sentinel["_slide"]["ts"] == "02:57"
+
+
+def test_resolve_slide_blocks_uploads_and_captions(tmp_path):
+    from forge_video_summarizer.stages.export_notion import _resolve_slide_blocks
+    slides = tmp_path / "slides"
+    slides.mkdir()
+    (slides / "slide_02-57.png").write_bytes(b"\x89PNGfake")
+    blocks = [
+        {"type": "paragraph", "paragraph": {"rich_text": []}},
+        {"type": "_slide", "_slide": {"ts": "02:57"}},
+    ]
+
+    class FakeUploads:
+        def create(self, **k):
+            return {"id": "up-1"}
+
+        def send(self, **k):
+            return {"status": "uploaded"}
+
+    client = MagicMock()
+    client.file_uploads = FakeUploads()
+    out = _resolve_slide_blocks(client, blocks, slides)
+    assert [b["type"] for b in out] == ["paragraph", "image"]
+    img = out[1]["image"]
+    assert img["file_upload"]["id"] == "up-1"
+    assert img["caption"][0]["text"]["content"] == "[02:57]"
+
+
+def test_resolve_slide_blocks_drops_missing_frame(tmp_path):
+    from forge_video_summarizer.stages.export_notion import _resolve_slide_blocks
+    blocks = [{"type": "_slide", "_slide": {"ts": "09:09"}}]
+    out = _resolve_slide_blocks(MagicMock(), blocks, tmp_path)  # no such file
+    assert out == []
+
+
 # ── export_summary (mocked notion-client) ───────────────────────────────────
 
 def _fake_client(existing_children=None):
