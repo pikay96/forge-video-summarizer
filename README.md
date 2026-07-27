@@ -103,14 +103,13 @@ Flags: `--output <dir>` (default `output/`), `--force` (ignore cache), `--env <p
    **dedicated second pass** authors an **Excalidraw overview image** from the finished
    summary and renders it to `overview.png` (see below).
    - **Optional `--slides`** (for slide/PPT-style talks): scene-detect distinct slides,
-     pick a clean caption-free frame for each, and let the vision model choose the KEY
+     pick the frame whose caption hides the least, and let the vision model choose the KEY
      slides and place each next to the point it illustrates (as `![slide@MM:SS]`).
      Real slide screenshots embedded inline — kept *in addition to* the overview image.
-     Frames are embedded as captured. Best-effort; never blocks the summary.
-   - **`--mask-overlays`** (experimental, off by default): additionally mask the presenter's
-     webcam and crop app/browser chrome off the selected screenshots. The regions come from
-     the same vision call, so it costs no extra request — but it can misjudge a region, so
-     it is opt-in while it matures.
+     **Frames are embedded exactly as captured — never cropped, never masked.** On-screen
+     captions are handled by picking a different moment, not by editing pixels: cropping
+     and masking were tried and removed because they destroyed real slide content.
+     Best-effort; never blocks the summary.
 5. **Export** — publishes `summary.md` to Notion as a **subpage** of a configured parent
    page (official `notion-client` SDK). Each page carries the **overview image** (uploaded
    via Notion `file_uploads`) at the top, an embedded bilibili video, a metadata callout,

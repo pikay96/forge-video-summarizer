@@ -15,7 +15,6 @@ from .downloaders import get_downloader
 from .errors import DownloadError
 from .models import Transcript, VideoMetadata
 from .stages import (
-    clean_selected_frames,
     detect_slide_candidates,
     export_summary,
     extract_audio,
@@ -119,7 +118,6 @@ class Pipeline:
         *,
         force: bool = False,
         slides: bool = False,
-        mask_overlays: bool = False,
     ) -> Path:
         if Workspace.should_skip(ws.summary_path, force):
             return ws.summary_path
@@ -143,20 +141,18 @@ class Pipeline:
         # ![slide@MM:SS] placeholders into the summary. Best-effort — never blocks.
         if slides:
             try:
-                summary = self._add_slides(ws, summary, mask_overlays=mask_overlays)
+                summary = self._add_slides(ws, summary)
             except Exception as exc:  # noqa: BLE001 - slides are additive, degrade
                 log.warning("slide step failed, continuing without slides: %s", exc)
 
         ws.summary_path.write_text(summary, "utf-8")
         return ws.summary_path
 
-    def _add_slides(self, ws: Workspace, summary: str, *, mask_overlays: bool = False) -> str:
+    def _add_slides(self, ws: Workspace, summary: str) -> str:
         """Detect slide frames -> model selects & places them -> summary with placeholders.
 
-        Frames are embedded as captured. Overlay cleanup (webcam mask / chrome crop) is
-        opt-in via `mask_overlays` and deliberately off by default: the core feature is
-        getting the right screenshot into the summary, and cleanup is a separate polish
-        step that can misjudge a region.
+        Frames are embedded EXACTLY as captured — never cropped or masked. On-screen
+        clutter is handled by picking a cleaner frame, not by editing pixels.
         """
         video = ws.find_video()
         if video is None:
@@ -168,8 +164,6 @@ class Pipeline:
         placements = select_slide_placements(candidates, summary, self.config)
         if not placements:
             return summary
-        if mask_overlays:
-            clean_selected_frames(candidates, placements)
         return place_slides(summary, placements)
 
     # ── Stage 5 ─────────────────────────────────────────────────────────
@@ -198,22 +192,17 @@ class Pipeline:
         force: bool = False,
         export: bool = False,
         slides: bool = False,
-        mask_overlays: bool = False,
     ) -> Path:
         """Full pipeline: source (URL or local file) -> summary.md path.
         When export=True, also publishes to Notion (Stage 5).
-        When slides=True, extracts slide screenshots into the Walkthrough.
-        When mask_overlays=True, also cleans webcam/chrome off those frames
-        (experimental; off by default)."""
+        When slides=True, extracts slide screenshots into the Walkthrough."""
         if _looks_like_url(source):
             ws = self.run_download(source, force=force)
         else:
             ws = self.workspace_for_local(source)
         self.run_extract(ws, force=force)
         self.run_transcribe(ws, force=force)
-        summary_path = self.run_summarize(
-            ws, force=force, slides=slides, mask_overlays=mask_overlays
-        )
+        summary_path = self.run_summarize(ws, force=force, slides=slides)
         if export:
             self.run_export(ws, force=force)
         return summary_path

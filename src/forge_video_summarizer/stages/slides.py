@@ -28,7 +28,7 @@ from typing import Any
 
 from ..config import Config
 from ._openai import call_responses_vision, make_client
-from .frames import SlideCandidate, apply_cleanup, format_ts
+from .frames import SlideCandidate, format_ts
 
 log = logging.getLogger(__name__)
 
@@ -36,7 +36,6 @@ __all__ = [
     "place_slides",
     "SLIDE_PLACEHOLDER_RE",
     "select_slide_placements",
-    "clean_selected_frames",
 ]
 
 # Frames are downscaled before being sent to the model. Selection/region judgments need
@@ -84,15 +83,8 @@ never merely for being cropped or zoomed.
 TASK 2 — PLACE. For each kept slide, choose the anchor it best illustrates (the point in the
 summary whose topic the slide depicts; usually at or just before the slide's timestamp).
 
-TASK 3 — CLEAN. For each kept slide, report the regions that are NOT slide content:
-  "chrome_bottom": fraction of the frame HEIGHT (0-1) where top browser/app UI ends — tabs,
-      URL bar, window buttons. Use 0 when the frame has none.
-  "webcam": [x0, x1, y0, y1] as fractions of width/height for the presenter's camera bubble.
-      It may be in ANY corner and differs per frame. Use null when no webcam is visible.
-      Give a tight box around the bubble only; do not include slide content.
-
 Return ONLY a JSON array, no prose, no code fences:
-[{"slide": "MM:SS", "section": "MM:SS", "chrome_bottom": 0.0, "webcam": [x0,x1,y0,y1]|null}]
+[{"slide": "MM:SS", "section": "MM:SS"}]
 Use the EXACT timestamp labels given for slides and the EXACT anchors given for sections.
 If none of the frames are worth keeping, return [].
 """
@@ -212,8 +204,7 @@ def _dedupe_placements(placements: list[dict]) -> list[dict]:
 
 def _parse_placements(reply: str, valid_slides: set[str], valid_sections: set[str]) -> list[dict]:
     """Parse + validate the model's JSON. Drops entries with unknown slide/section labels
-    and de-dupes so each slide is placed at most once. Cleanup fields are optional and
-    sanitized: chrome_bottom clamped to [0,1), webcam kept only if 4 sane fractions."""
+    and de-dupes so each slide is placed at most once."""
     raw = reply.strip()
     if "```" in raw:  # strip an accidental code fence
         raw = re.sub(r"^```(?:json)?|```$", "", raw, flags=re.MULTILINE).strip()
@@ -233,53 +224,8 @@ def _parse_placements(reply: str, valid_slides: set[str], valid_sections: set[st
         if slide not in valid_slides or section not in valid_sections or slide in seen:
             continue
         seen.add(slide)
-        out.append({
-            "slide": slide,
-            "section": section,
-            "chrome_bottom": _clean_fraction(item.get("chrome_bottom")),
-            "webcam": _clean_box(item.get("webcam")),
-        })
+        out.append({"slide": slide, "section": section})
     return out
-
-
-def _clean_fraction(value: object) -> float:
-    try:
-        f = float(value)  # type: ignore[arg-type]
-    except (TypeError, ValueError):
-        return 0.0
-    return f if 0.0 <= f < 1.0 else 0.0
-
-
-def _clean_box(value: object) -> tuple[float, float, float, float] | None:
-    """Accept [x0,x1,y0,y1] fractions only if they form a sane, in-bounds box."""
-    if not isinstance(value, (list, tuple)) or len(value) != 4:
-        return None
-    try:
-        x0, x1, y0, y1 = (float(v) for v in value)
-    except (TypeError, ValueError):
-        return None
-    if not (0.0 <= x0 < x1 <= 1.0 and 0.0 <= y0 < y1 <= 1.0):
-        return None
-    return (x0, x1, y0, y1)
-
-
-def clean_selected_frames(candidates: list[SlideCandidate], placements: list[dict]) -> None:
-    """Apply the model-reported cleanup (webcam mask + chrome crop) to the kept frames.
-
-    Only frames that were actually selected are touched — no point cleaning discards.
-    Best-effort per frame; a failure leaves that frame as-is.
-    """
-    by_label = {format_ts(c.timestamp): c.path for c in candidates}
-    for p in placements:
-        path = by_label.get(p["slide"])
-        if path is None or not path.is_file():
-            continue
-        if p.get("chrome_bottom") or p.get("webcam"):
-            apply_cleanup(
-                path,
-                chrome_bottom=p.get("chrome_bottom", 0.0),
-                webcam=p.get("webcam"),
-            )
 
 
 def place_slides(summary_markdown: str, placements: list[dict]) -> str:

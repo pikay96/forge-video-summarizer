@@ -8,7 +8,6 @@ from forge_video_summarizer.stages.frames import (
     SlideCandidate,
     _cluster,
     _fill_gaps,
-    apply_cleanup,
     detect_slide_candidates,
     format_ts,
 )
@@ -102,53 +101,6 @@ def test_pick_clean_frame_prefers_low_caption(tmp_path):
     ):
         out = frames._pick_clean_frame(Path("v.mp4"), 0.0, tmp_path)
     assert out is not None and out.name == "slide_00-00.png"
-
-
-# ── apply_cleanup (model-reported regions) ──────────────────────────────────
-
-def _png(path: Path, size=(200, 100), colour=(20, 20, 20)):
-    from PIL import Image
-    Image.new("RGB", size, colour).save(path)
-    return path
-
-
-def test_apply_cleanup_crops_chrome(tmp_path):
-    from PIL import Image
-    p = _png(tmp_path / "s.png", size=(200, 100))
-    assert apply_cleanup(p, chrome_bottom=0.1) is True
-    assert Image.open(p).size == (200, 90)
-
-
-def test_apply_cleanup_masks_webcam_in_any_corner(tmp_path):
-    from PIL import Image
-    for box in [(0.75, 0.98, 0.02, 0.25), (0.02, 0.25, 0.75, 0.98)]:  # top-right, bottom-left
-        p = _png(tmp_path / "s.png", size=(200, 200), colour=(10, 10, 10))
-        # paint a bright patch where the "webcam" is, then confirm it gets covered
-        im = Image.open(p)
-        x0, x1, y0, y1 = box
-        for x in range(int(200 * x0), int(200 * x1)):
-            for y in range(int(200 * y0), int(200 * y1)):
-                im.putpixel((x, y), (250, 250, 250))
-        im.save(p)
-        assert apply_cleanup(p, webcam=box) is True
-        out = Image.open(p).convert("RGB")
-        cx = int(200 * (x0 + x1) / 2)
-        cy = int(200 * (y0 + y1) / 2)
-        assert out.getpixel((cx, cy)) != (250, 250, 250)  # bright patch is gone
-
-
-def test_apply_cleanup_ignores_implausible_regions(tmp_path):
-    from PIL import Image
-    p = _png(tmp_path / "s.png", size=(200, 100))
-    before = Image.open(p).size
-    # webcam box covering most of the frame -> refused
-    assert apply_cleanup(p, webcam=(0.0, 1.0, 0.0, 1.0)) is False
-    assert Image.open(p).size == before
-
-
-def test_apply_cleanup_noop_without_regions(tmp_path):
-    p = _png(tmp_path / "s.png")
-    assert apply_cleanup(p) is False
 
 
 def test_slide_candidate_dataclass(tmp_path):

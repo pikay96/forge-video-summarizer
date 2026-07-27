@@ -45,10 +45,6 @@ def build_parser() -> argparse.ArgumentParser:
                 "--slides", action="store_true",
                 help="extract slide screenshots into the Walkthrough (for slide/PPT talks)",
             )
-            p.add_argument(
-                "--mask-overlays", action="store_true",
-                help="experimental: mask the webcam / crop app chrome off slide screenshots",
-            )
     return parser
 
 
@@ -66,8 +62,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command == "summarize":
             out = pipeline.run_all(
-                args.source, force=force, export=args.export,
-                slides=args.slides, mask_overlays=args.mask_overlays,
+                args.source, force=force, export=args.export, slides=args.slides,
             )
             print(f"Summary written: {out}")
             if args.export:
@@ -85,9 +80,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Transcript: {ws.transcript_txt_path}")
         elif args.command == "summarize-transcript":
             ws = _workspace_for(pipeline, args.source, force=force)
-            out = pipeline.run_summarize(
-                ws, force=force, slides=args.slides, mask_overlays=args.mask_overlays
-            )
+            out = pipeline.run_summarize(ws, force=force, slides=args.slides)
             print(f"Summary written: {out}")
         elif args.command == "export":
             ws = _workspace_for(pipeline, args.source, force=force)

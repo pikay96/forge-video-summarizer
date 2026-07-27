@@ -13,12 +13,11 @@ stage finds the distinct slides shown in the video and picks a clean frame for e
      the vision model is the quality gate and prunes what isn't useful.
   4. Caption-aware pick: within each slide's window, sample several frames and choose the
      one with the LEAST on-screen subtitle (bright caption bar in the bottom strip).
-  5. Cleanup (`apply_cleanup`): remove overlays that aren't slide content — the presenter's
-     webcam bubble (which can sit in ANY corner and moves between videos) and browser/app
-     chrome (tabs, URL bar). These regions are reported by the VISION MODEL in
-     `slides.py` — it already looks at every candidate, so it identifies them far more
-     reliably than pixel heuristics, which break across dark/light slide backgrounds.
-     The webcam patch is filled with the ring-median colour so it blends into the slide.
+  5. Frames are used EXACTLY AS CAPTURED — never cropped, never masked. Cropping and
+     masking were tried and removed: they destroyed real slide content (a chrome-crop
+     heuristic cut 25% off a light-background slide) and a mis-placed mask silently hides
+     information. An unwanted webcam in a corner is cosmetic; missing slide content is not.
+     The only lever we use against on-screen clutter is WHICH frame we pick (step 4).
 
 The model (Stage 4b `slides.py`) then decides which candidates are actually key slides and
 where each belongs. This stage only PRODUCES candidates; it makes no keep/drop judgment.
@@ -29,7 +28,6 @@ from __future__ import annotations
 import logging
 import re
 import shutil
-import statistics
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -39,7 +37,6 @@ log = logging.getLogger(__name__)
 __all__ = [
     "SlideCandidate",
     "detect_slide_candidates",
-    "apply_cleanup",
     "format_ts",
     "SCENE_THRESHOLD",
 ]
@@ -50,13 +47,11 @@ __all__ = [
 SCENE_THRESHOLD = 0.27
 _MIN_GAP_SECONDS = 8.0  # candidates closer than this collapse into one slide cluster
 _MAX_GAP_SECONDS = 45.0  # longer stretches get filled with extra samples (recall backstop)
-_CAPTION_SAMPLES = 5  # frames sampled per slide window to find a caption-free one
+_CAPTION_SAMPLES = 16  # frames sampled per slide window when hunting a caption-free one
+_CAPTION_STEP = 1.0  # seconds between those samples
+_CAPTION_CLEAN = 0.004  # score at/below this counts as "no caption" — stop searching
 _SHOWINFO_TS = re.compile(r"pts_time:([0-9.]+)")
 
-# Overlay-cleanup tuning (regions come from the vision model; these are sanity bounds)
-_MASK_PAD = 0.03  # pad the detected webcam box by this fraction of the frame
-_MAX_MASK_AREA = 0.20  # refuse to mask more than this share of the frame (safety)
-_CHROME_MAX = 0.25  # only look for UI chrome within the top fraction of the frame
 
 
 @dataclass
@@ -156,108 +151,69 @@ def _extract_frame(video: Path, t: float, out_path: Path) -> bool:
 
 
 def _caption_score(image_path: Path) -> float:
-    """Fraction of bright-yellow pixels in the bottom strip (subtitle caption proxy).
+    """How much of the frame is covered by a subtitle caption, weighted by what it hides.
 
-    ~0 for a caption-free frame; higher when a subtitle bar is present. If Pillow is
-    unavailable, return 0.0 so the pipeline still works (just no caption avoidance).
+    Two signals, because caption PRESENCE alone is the wrong target — what matters is
+    whether the caption OCCLUDES slide content:
+
+      1. coverage — fraction of bright-yellow caption pixels in the bottom strip.
+      2. occlusion — whether the caption band sits over busy slide content (text, boxes,
+         diagrams) rather than empty margin. A caption floating over blank space at the
+         bottom of a slide is harmless; one sitting on top of a label or formula is not.
+
+    Returns 0.0 for a caption-free frame; larger is worse. If Pillow is unavailable,
+    returns 0.0 so the pipeline still works (just no caption avoidance).
     """
     try:
         from PIL import Image
     except ImportError:  # pragma: no cover - optional dependency
         return 0.0
     try:
-        with Image.open(image_path) as im:
-            im = im.convert("RGB")
-            w, h = im.size
-            strip = im.crop((0, int(h * 0.80), w, h))
-            strip = strip.resize((max(1, strip.width // 4), max(1, strip.height // 4)))
-            px = list(strip.getdata())
-            if not px:
-                return 0.0
-            yellow = sum(1 for r, g, b in px if r > 150 and g > 150 and b < 120)
-            return yellow / len(px)
+        with Image.open(image_path) as src:
+            im = src.convert("RGB")
+        w, h = im.size
+        strip = im.crop((0, int(h * 0.72), w, h))
+        small = strip.resize((max(1, strip.width // 4), max(1, strip.height // 4)))
+        px = list(small.getdata())
+        if not px:
+            return 0.0
+        yellow = [
+            i for i, (r, g, b) in enumerate(px) if r > 150 and g > 150 and b < 120
+        ]
+        coverage = len(yellow) / len(px)
+        if coverage == 0.0:
+            return 0.0
+        # Occlusion: how busy are the rows the caption covers? Busy => it is hiding
+        # something. Measured on the greyscale strip as mean horizontal contrast.
+        gray = small.convert("L")
+        gw, gh = gray.size
+        rows = {yellow_i // gw for yellow_i in yellow}
+        data = list(gray.getdata())
+        busy = 0.0
+        for row in rows:
+            line = data[row * gw : (row + 1) * gw]
+            if len(line) > 1:
+                busy += sum(
+                    abs(line[i + 1] - line[i]) for i in range(len(line) - 1)
+                ) / (len(line) - 1)
+        busy = busy / max(1, len(rows)) / 255.0
+        return coverage * (1.0 + 2.0 * busy)
     except Exception:  # noqa: BLE001 - scoring is best-effort
         return 0.0
 
 
-def apply_cleanup(
-    image_path: Path,
-    *,
-    chrome_bottom: float = 0.0,
-    webcam: tuple[float, float, float, float] | None = None,
-) -> bool:
-    """Remove non-slide overlays from a frame, using regions reported by the vision model.
-
-    `chrome_bottom` — fraction of height where top browser/app chrome ends (0 = none);
-    that strip is cropped off. `webcam` — (x0, x1, y0, y1) fractions of the presenter's
-    camera bubble, in ANY corner; it is filled with the median colour of a ring just
-    outside the box so the patch blends into the slide background.
-
-    Edits the PNG in place. Returns True if anything changed. Best-effort: bad/implausible
-    regions are ignored and the original frame is left intact.
-    """
-    try:
-        from PIL import Image, ImageDraw
-    except ImportError:  # pragma: no cover - optional dependency
-        return False
-    try:
-        with Image.open(image_path) as src:
-            im = src.convert("RGB")
-        w, h = im.size
-        changed = False
-
-        if webcam:
-            x0, x1, y0, y1 = webcam
-            if 0 <= x0 < x1 <= 1 and 0 <= y0 < y1 <= 1 \
-                    and (x1 - x0) * (y1 - y0) <= _MAX_MASK_AREA:
-                bx0 = max(0, int(w * (x0 - _MASK_PAD)))
-                bx1 = min(w, int(w * (x1 + _MASK_PAD)))
-                by0 = max(0, int(h * (y0 - _MASK_PAD)))
-                by1 = min(h, int(h * (y1 + _MASK_PAD)))
-                if bx1 > bx0 and by1 > by0:
-                    fill = _ring_median(im, bx0, bx1, by0, by1)
-                    ImageDraw.Draw(im).rectangle((bx0, by0, bx1, by1), fill=fill)
-                    changed = True
-
-        if 0 < chrome_bottom < _CHROME_MAX:
-            cut = int(h * chrome_bottom)
-            if 0 < cut < h - 10:
-                im = im.crop((0, cut, w, h))
-                changed = True
-
-        if changed:
-            im.save(image_path)
-        return changed
-    except Exception:  # noqa: BLE001 - cleanup is additive; never break the pipeline
-        return False
-
-
-def _ring_median(im, bx0: int, bx1: int, by0: int, by1: int) -> tuple[int, int, int]:
-    """Median colour of a ring just outside the box — a robust background estimate that
-    blends the patch on both dark and light slides."""
-    w, h = im.size
-    ring = 12
-    samples = []
-    for yy in range(by0, by1, 6):
-        for xx in (max(0, bx0 - ring), min(w - 1, bx1 + ring)):
-            samples.append(im.getpixel((xx, yy)))
-    for xx in range(bx0, bx1, 6):
-        for yy in (max(0, by0 - ring), min(h - 1, by1 + ring)):
-            samples.append(im.getpixel((xx, yy)))
-    if not samples:
-        return (0, 0, 0)
-    return tuple(  # type: ignore[return-value]
-        int(statistics.median(c[i] for c in samples)) for i in range(3)
-    )
-
-
 def _pick_clean_frame(video: Path, t: float, out_dir: Path) -> Path | None:
-    """Pick the least-captioned frame near time t. Samples a few frames from t onward
-    (captions are transient — later frames on the same slide are often caption-free)."""
+    """Pick the frame near time t whose caption hides the least.
+
+    Captions are transient, so we sample forward across the slide's window and keep the
+    lowest-scoring frame, stopping early once a genuinely caption-free frame turns up.
+    This is the ONLY mechanism we use against on-screen captions — frames are never
+    cropped or masked, so a caption is avoided by choosing a different moment or not at all.
+    """
     best_path: Path | None = None
     best_score = float("inf")
     for i in range(_CAPTION_SAMPLES):
-        sample_t = t + i * 1.5
+        sample_t = t + i * _CAPTION_STEP
         tmp = out_dir / f"_probe_{i}.png"
         if not _extract_frame(video, sample_t, tmp):
             continue
@@ -269,10 +225,12 @@ def _pick_clean_frame(video: Path, t: float, out_dir: Path) -> Path | None:
             best_path = tmp
         else:
             tmp.unlink(missing_ok=True)
-        if best_score <= 0.001:
+        if best_score <= _CAPTION_CLEAN:
             break
     if best_path is None:
         return None
+    if best_score > _CAPTION_CLEAN:
+        log.debug("no caption-free frame near %.1fs (best score %.4f)", t, best_score)
     final = out_dir / f"slide_{format_ts(t).replace(':', '-')}.png"
     best_path.replace(final)
     return final
@@ -286,8 +244,7 @@ def detect_slide_candidates(
 ) -> list[SlideCandidate]:
     """Detect distinct slides and extract one caption-free frame each.
 
-    Overlay cleanup (webcam mask / chrome crop) happens later, in `slides.py`, using
-    regions the vision model reports — see `apply_cleanup`.
+    Frames are returned exactly as captured — no cropping, no masking.
 
     Returns candidates ordered by timestamp. Never raises on a per-frame failure —
     only if ffmpeg itself is missing.

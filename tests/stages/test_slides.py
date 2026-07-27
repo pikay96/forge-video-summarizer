@@ -7,12 +7,9 @@ from forge_video_summarizer.config import Config
 from forge_video_summarizer.stages.frames import SlideCandidate
 from forge_video_summarizer.stages.slides import (
     SLIDE_PLACEHOLDER_RE,
-    _clean_box,
-    _clean_fraction,
     _dedupe_placements,
     _parse_placements,
     _section_anchors,
-    clean_selected_frames,
     place_slides,
     select_slide_placements,
 )
@@ -50,31 +47,6 @@ def test_parse_placements_validates_and_dedupes():
     out = _parse_placements(reply, {"02:57", "04:32"}, {"00:06", "02:57", "04:32"})
     assert len(out) == 1
     assert out[0]["slide"] == "02:57" and out[0]["section"] == "02:57"
-
-
-def test_parse_placements_extracts_cleanup_fields():
-    reply = '[{"slide":"02:57","section":"02:57","chrome_bottom":0.09,' \
-            '"webcam":[0.8,0.99,0.02,0.2]}]'
-    out = _parse_placements(reply, {"02:57"}, {"02:57"})
-    assert out[0]["chrome_bottom"] == 0.09
-    assert out[0]["webcam"] == (0.8, 0.99, 0.02, 0.2)
-
-
-def test_parse_placements_sanitizes_bad_cleanup():
-    reply = '[{"slide":"02:57","section":"02:57","chrome_bottom":5,"webcam":[1,0,2,3]}]'
-    out = _parse_placements(reply, {"02:57"}, {"02:57"})
-    assert out[0]["chrome_bottom"] == 0.0  # out of range -> ignored
-    assert out[0]["webcam"] is None  # inverted/out-of-bounds -> ignored
-
-
-def test_clean_fraction_and_box_helpers():
-    assert _clean_fraction("0.1") == 0.1
-    assert _clean_fraction(None) == 0.0
-    assert _clean_fraction(1.5) == 0.0
-    assert _clean_box([0.1, 0.2, 0.3, 0.4]) == (0.1, 0.2, 0.3, 0.4)
-    assert _clean_box([0.2, 0.1, 0.3, 0.4]) is None  # x0 >= x1
-    assert _clean_box("nope") is None
-    assert _clean_box([0.1, 0.2, 0.3]) is None
 
 
 def test_parse_placements_strips_code_fence():
@@ -193,30 +165,3 @@ def test_dedupe_placements_keeps_one_per_slide():
     out = _dedupe_placements(dupes)
     assert [p["slide"] for p in out] == ["00:06", "05:15"]
 
-
-def test_clean_selected_frames_applies_only_to_kept(tmp_path):
-    kept = tmp_path / "slide_02-57.png"
-    kept.write_bytes(b"x")
-    other = tmp_path / "slide_00-06.png"
-    other.write_bytes(b"x")
-    cands = [
-        SlideCandidate(timestamp=177.0, path=kept),
-        SlideCandidate(timestamp=6.0, path=other),
-    ]
-    placements = [{"slide": "02:57", "section": "02:57",
-                   "chrome_bottom": 0.08, "webcam": (0.8, 0.95, 0.0, 0.2)}]
-    with patch("forge_video_summarizer.stages.slides.apply_cleanup") as ac:
-        clean_selected_frames(cands, placements)
-    ac.assert_called_once()
-    assert ac.call_args.args[0] == kept
-    assert ac.call_args.kwargs["chrome_bottom"] == 0.08
-
-
-def test_clean_selected_frames_skips_when_nothing_to_clean(tmp_path):
-    p = tmp_path / "slide_02-57.png"
-    p.write_bytes(b"x")
-    cands = [SlideCandidate(timestamp=177.0, path=p)]
-    placements = [{"slide": "02:57", "section": "02:57", "chrome_bottom": 0.0, "webcam": None}]
-    with patch("forge_video_summarizer.stages.slides.apply_cleanup") as ac:
-        clean_selected_frames(cands, placements)
-    ac.assert_not_called()
