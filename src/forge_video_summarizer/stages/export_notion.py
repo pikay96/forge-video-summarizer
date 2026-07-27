@@ -118,6 +118,62 @@ def _equation_block(expr: str) -> dict:
 _BLOCK_EQ_INLINE = re.compile(r"^\\\[\s*(.*?)\s*\\\]$|^\$\$\s*(.*?)\s*\$\$$")
 
 
+_TABLE_ROW_RE = re.compile(r"^\|(.+)\|\s*$")
+_TABLE_SEP_RE = re.compile(r"^\|[\s:|-]+\|\s*$")
+
+
+def _split_table_row(line: str) -> list[str]:
+    """Cells of a markdown table row, honouring `\\|` escapes.
+
+    Only `\\|` is an escape — every other backslash is content and must survive, or LaTeX
+    like `\\(d_{\\text{head}}\\)` silently degrades to literal `(d_{text{head}})`.
+    """
+    inner = line.strip().strip("|")
+    cells: list[str] = []
+    buf = ""
+    k = 0
+    while k < len(inner):
+        ch = inner[k]
+        if ch == "\\" and k + 1 < len(inner) and inner[k + 1] == "|":
+            buf += "|"
+            k += 2
+            continue
+        if ch == "|":
+            cells.append(buf.strip())
+            buf = ""
+        else:
+            buf += ch
+        k += 1
+    cells.append(buf.strip())
+    return cells
+
+
+def _table_block(header: list[str], rows: list[list[str]]) -> dict:
+    """A real Notion `table` block (markdown pipe syntax renders as literal text).
+
+    Notion requires every row to declare exactly `table_width` cells, so short rows are
+    padded and long ones truncated — otherwise the whole export is rejected.
+    """
+    width = len(header)
+
+    def row_block(cells: list[str]) -> dict:
+        padded = (cells + [""] * width)[:width]
+        return {
+            "type": "table_row",
+            "table_row": {"cells": [_rich_text(c) for c in padded]},
+        }
+
+    return {
+        "type": "table",
+        "table": {
+            "table_width": width,
+            "has_column_header": True,
+            "has_row_header": False,
+            "children": [row_block(header), *(row_block(r) for r in rows)],
+        },
+    }
+
+
 def markdown_to_blocks(markdown: str) -> list[dict]:
     """Convert Stage-4 markdown into a list of Notion block objects."""
     blocks: list[dict] = []
@@ -131,6 +187,21 @@ def markdown_to_blocks(markdown: str) -> list[dict]:
         if sm := _SLIDE_PLACEHOLDER_RE.fullmatch(stripped):
             blocks.append({"type": "_slide", "_slide": {"ts": sm.group(1)}})
             i += 1
+            continue
+
+        # Markdown table: header row, |---|---| separator, then body rows.
+        if (
+            _TABLE_ROW_RE.match(stripped)
+            and i + 1 < len(lines)
+            and _TABLE_SEP_RE.match(lines[i + 1].strip())
+        ):
+            header = _split_table_row(stripped)
+            i += 2  # header + separator
+            body: list[list[str]] = []
+            while i < len(lines) and _TABLE_ROW_RE.match(lines[i].strip()):
+                body.append(_split_table_row(lines[i].strip()))
+                i += 1
+            blocks.append(_table_block(header, body))
             continue
 
         fence = _FENCE_RE.match(stripped)

@@ -279,3 +279,44 @@ def test_prefer_cleaner_duplicates_keeps_unknown_labels(tmp_path):
     from forge_video_summarizer.stages.slides import _prefer_cleaner_duplicates
     pl = [{"slide": "09:99", "section": "04:54"}]
     assert _prefer_cleaner_duplicates(pl, []) == pl
+
+
+# ── unusable frames are dropped rather than shipped mutilated ───────────────
+
+def test_reject_unusable_drops_heavily_cropped(tmp_path):
+    from forge_video_summarizer.stages.frames import SlideCandidate
+    from forge_video_summarizer.stages.slides import _reject_unusable_frames
+
+    cropped = SlideCandidate(
+        timestamp=315.0, path=_img(tmp_path / "slide_05-15.png", edge_ink=True)
+    )
+    out = _reject_unusable_frames([{"slide": "05:15", "section": "04:54"}], [cropped])
+    assert out == []  # better no screenshot than half a slide
+
+
+def test_reject_unusable_keeps_clean_frames(tmp_path):
+    from forge_video_summarizer.stages.frames import SlideCandidate
+    from forge_video_summarizer.stages.slides import _reject_unusable_frames
+
+    clean = SlideCandidate(timestamp=315.0, path=_img(tmp_path / "slide_05-15.png"))
+    pl = [{"slide": "05:15", "section": "04:54"}]
+    assert _reject_unusable_frames(pl, [clean]) == pl
+
+
+def test_reject_unusable_drops_caption_over_content(tmp_path):
+    from forge_video_summarizer.stages.frames import SlideCandidate
+    from forge_video_summarizer.stages.slides import _reject_unusable_frames
+
+    # a wide caption band covering a busy region scores well above _MAX_CAPTION
+    obscured = SlideCandidate(
+        timestamp=315.0,
+        path=_img(tmp_path / "slide_05-15.png", bar=(5, 110, 195, 145)),
+    )
+    out = _reject_unusable_frames([{"slide": "05:15", "section": "04:54"}], [obscured])
+    assert out == []
+
+
+def test_reject_unusable_keeps_unknown_labels(tmp_path):
+    from forge_video_summarizer.stages.slides import _reject_unusable_frames
+    pl = [{"slide": "09:99", "section": "04:54"}]
+    assert _reject_unusable_frames(pl, []) == pl

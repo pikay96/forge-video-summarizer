@@ -26,14 +26,19 @@ AND could be questioned on it and hold their own.
 Write the summary in the transcript's dominant language (if the transcript mixes
 languages, use whichever dominates).
 
-Produce Markdown with these sections:
+Produce Markdown with these sections, IN THIS ORDER:
 1. Title — the video title.
 2. TL;DR — 2-3 sentences: what the video is and its single core takeaway.
-3. Context / why it matters — brief framing: the problem/topic and who should care.
-4. Walkthrough — the heart of the summary. ORGANIZE IT BY CONCEPT, NOT BY THE CLOCK.
-5. Key takeaways — bullet points the reader should walk away knowing.
-6. Q&A / interview prep — the questions this material answers, each with a concise
-   answer, including the probing "why/how" questions an interviewer would ask.
+3. Why it matters — brief framing: the problem/topic and who should care. END THIS SECTION
+   with a short bullet list headed "This video answers:" giving the 3-5 KEY QUESTIONS the
+   video sets out to answer, phrased as real questions ("How much VRAM does a KV cache
+   actually need?", "Why cache K and V but not Q?"). They orient the reader before the
+   detail starts, so make them the questions someone lands on this page hoping to resolve.
+4. Key takeaways — bullet points the reader should walk away knowing. Placed BEFORE the
+   walkthrough so a reader gets the payoff first and can then read on for the reasoning.
+5. Walkthrough — the heart of the summary. ORGANIZE IT BY CONCEPT, NOT BY THE CLOCK.
+6. Q&A — the questions this material answers, each with a concise answer, including the
+   probing "why/how" questions an interviewer would ask.
 
 HOW TO WRITE THE WALKTHROUGH — this is what separates a summary from a transcript:
 

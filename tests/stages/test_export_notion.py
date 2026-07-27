@@ -313,3 +313,74 @@ def test_export_no_overview_when_absent(config, tmp_path):
     export_summary("# Title\n\nbody", config, metadata=_meta(),
                    overview_image=tmp_path / "missing.png", client=client)
     client.file_uploads.create.assert_not_called()
+
+
+# ── markdown tables -> real Notion table blocks ─────────────────────────────
+
+def _cell_text(cell):
+    out = ""
+    for s in cell:
+        if s["type"] == "equation":
+            out += s["equation"]["expression"]
+        else:
+            out += s["text"]["content"]
+    return out
+
+
+TABLE_MD = """Intro line.
+
+| 符号 | 含义 |
+|---|---|
+| \\(n\\) | 上下文中的 token 数 |
+| \\(d_{\\text{head}}\\) | 每个 KV 头的维度 |
+
+After line.
+"""
+
+
+def test_markdown_table_becomes_a_table_block():
+    blocks = markdown_to_blocks(TABLE_MD)
+    tables = [b for b in blocks if b["type"] == "table"]
+    assert len(tables) == 1
+    t = tables[0]["table"]
+    assert t["table_width"] == 2
+    assert t["has_column_header"] is True
+    assert len(t["children"]) == 3  # header + 2 body rows
+
+
+def test_table_rows_keep_latex_as_equations():
+    t = [b for b in markdown_to_blocks(TABLE_MD) if b["type"] == "table"][0]["table"]
+    # backslashes must survive the cell split, or LaTeX degrades to literal text
+    assert _cell_text(t["children"][2]["table_row"]["cells"][0]) == "d_{\\text{head}}"
+    kinds = {s["type"] for s in t["children"][2]["table_row"]["cells"][0]}
+    assert kinds == {"equation"}
+
+
+def test_table_does_not_swallow_surrounding_text():
+    blocks = markdown_to_blocks(TABLE_MD)
+    paras = [b for b in blocks if b["type"] == "paragraph"]
+    joined = " ".join(
+        s["text"]["content"] for p in paras for s in p["paragraph"]["rich_text"]
+    )
+    assert "Intro line." in joined
+    assert "After line." in joined
+
+
+def test_table_pads_ragged_rows_to_table_width():
+    md = "| a | b | c |\n|---|---|---|\n| only-one |\n"
+    t = [b for b in markdown_to_blocks(md) if b["type"] == "table"][0]["table"]
+    assert t["table_width"] == 3
+    assert len(t["children"][1]["table_row"]["cells"]) == 3  # padded, not rejected
+
+
+def test_escaped_pipe_stays_inside_a_cell():
+    md = "| x | y |\n|---|---|\n| a \\| b | c |\n"
+    t = [b for b in markdown_to_blocks(md) if b["type"] == "table"][0]["table"]
+    cells = t["children"][1]["table_row"]["cells"]
+    assert len(cells) == 2
+    assert _cell_text(cells[0]) == "a | b"
+
+
+def test_pipe_line_without_separator_is_not_a_table():
+    md = "| this is just prose | with a pipe |\n\nnext paragraph\n"
+    assert not [b for b in markdown_to_blocks(md) if b["type"] == "table"]

@@ -57,6 +57,13 @@ _DUP_MARGIN = 0.01
 # A cropped slide loses information permanently, so it must outweigh a caption that may
 # well be sitting over empty margin.
 _CROP_WEIGHT = 0.5
+# Hard usability floor, applied AFTER the best frame for a slide has been chosen. A frame
+# still failing these is dropped outright — a mutilated screenshot (half a comparison, or a
+# formula with a term behind a subtitle) is worse for the reader than no screenshot.
+# Calibrated on the KV-cache talk, where scores are strongly bimodal: complete frames sit
+# at ~0.09 and zoomed/panned ones at ~0.19-0.25.
+_MAX_CROP = 0.14
+_MAX_CAPTION = 0.05
 
 # Matches an inserted placeholder line: ![slide@MM:SS] or ![slide@HH:MM:SS]
 SLIDE_PLACEHOLDER_RE = re.compile(r"!\[slide@(\d{1,2}:\d{2}(?::\d{2})?)\]")
@@ -72,17 +79,35 @@ You are curating slide screenshots for a video summary. You are shown, in order,
 candidate frames captured from a slide-style talk, each labeled with its timestamp. You are
 also given the summary's timestamp anchors.
 
-TASK 1 — SELECT. Keep ONLY the frames that are genuinely useful KEY slides: ones showing a
-diagram, formula, table, comparison, or structured content that materially helps a reader.
-DROP: transition/blurred/half-drawn frames, frames that are mostly the speaker's webcam, and
-near-empty slides. There is no target count — keep as few or as many as truly earn their
-place, but do NOT miss a slide that presents an important concept or comparison.
+TASK 1 — SELECT. A screenshot exists to show the reader something the WORDS CANNOT. The
+summary text already explains the content, so keep a frame ONLY when the picture itself
+carries irreplaceable information:
+  KEEP a diagram, architecture picture, or visual comparison whose SPATIAL LAYOUT is the
+  point — arrows, groupings, side-by-side columns, colour-coded structure. These are hard
+  to convey in prose, so the image genuinely adds understanding.
+  DROP a slide that is just text, a bullet list, a title card, or a single formula: the
+  summary already states these, so the screenshot is pure duplication. A "calculator"-style
+  slide whose numbers are quoted in the text adds nothing — drop it.
+  DROP transition/blurred/half-drawn frames, frames that are mostly the speaker's webcam,
+  and near-empty slides.
+Be STRICT. Too few screenshots is much better than a page cluttered with images that repeat
+the text. Ask of every frame: "does the reader understand something from this picture that
+the paragraph next to it fails to convey?" If not, drop it. There is no target count, and
+returning only two or three is a perfectly good answer.
 
-DE-DUPLICATE BY KEEPING ONE, NEVER BY DROPPING ALL. When several frames show the SAME slide,
-choose exactly ONE and drop the others. Dropping every frame of a slide because they look
-repetitive is a serious error: that slide then appears nowhere in the summary. Before you
-finish, re-check that every distinct slide topic in the candidates is represented by exactly
-one kept frame.
+REJECT UNUSABLE FRAMES OUTRIGHT — a bad screenshot is worse than none:
+  - HEAVILY CROPPED: if content is sliced off at the frame edges (a column, a label, or a
+    line of the formula cut in half) and no better frame of that slide exists, DROP the
+    slide entirely. Do not keep a mutilated screenshot.
+  - CAPTION OVER CONTENT: if a subtitle bar covers part of the slide that matters — a
+    label, a number, a term in a formula — and no cleaner frame of that slide exists, DROP
+    it. A caption sitting over empty margin is fine.
+Frames are embedded exactly as captured; nothing is cropped, masked or repaired afterwards,
+so whatever flaw you see is what the reader gets.
+
+DE-DUPLICATE BY KEEPING ONE. When several frames show the SAME slide, choose exactly ONE —
+the least cropped, then the least obscured by its caption — and drop the rest. (Dropping
+every frame of a slide is correct only when the slide fails the tests above.)
 
 WHICH DUPLICATE TO KEEP — this matters as much as which slide. Prefer, in order:
   1. the frame showing the MOST of the slide — nothing cut off at the left/right/top/bottom
@@ -238,6 +263,7 @@ def select_slide_placements(
 
     placements = _dedupe_placements(placements)
     placements = _prefer_cleaner_duplicates(placements, candidates)
+    placements = _reject_unusable_frames(placements, candidates)
     log.info("slide selection: %d candidates -> %d kept", len(candidates), len(placements))
     return placements
 
@@ -337,6 +363,34 @@ def _prefer_cleaner_duplicates(
             p = {**p, "slide": format_ts(best.timestamp)}
         out.append(p)
     return _dedupe_placements(out)
+
+
+def _reject_unusable_frames(placements: list[dict], candidates: list[SlideCandidate]) -> list[dict]:
+    """Drop kept slides whose best available frame is still badly cropped or obscured.
+
+    A mutilated screenshot is worse than no screenshot: it shows the reader half a
+    comparison or a formula with a term hidden behind a subtitle. The model is told to
+    reject these, but it judges cropping unreliably by eye, so we enforce a hard floor in
+    code after `_prefer_cleaner_duplicates` has already picked the best frame available.
+    Only frames that are still bad AFTER that search are dropped.
+    """
+    kept: list[dict] = []
+    by_label = {format_ts(c.timestamp): c for c in candidates}
+    for p in placements:
+        cand = by_label.get(p["slide"])
+        if cand is None:
+            kept.append(p)
+            continue
+        crop = _edge_crop_score(cand.path)
+        caption = _caption_score(cand.path)
+        if crop > _MAX_CROP or caption > _MAX_CAPTION:
+            log.info(
+                "slide %s dropped as unusable (crop %.4f, caption %.4f)",
+                p["slide"], crop, caption,
+            )
+            continue
+        kept.append(p)
+    return kept
 
 
 def _dedupe_placements(placements: list[dict]) -> list[dict]:
