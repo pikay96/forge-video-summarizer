@@ -31,13 +31,42 @@ _UA = (
 )
 _REFERER = "https://www.bilibili.com/"
 _BVID_RE = re.compile(r"(BV[0-9A-Za-z]+)")
+# Share shortener used by the bilibili mobile apps: https://b23.tv/<code>
+_SHORT_RE = re.compile(r"https?://b23\.tv/\S+", re.I)
 _VIEW_API = "https://api.bilibili.com/x/web-interface/view"
 _PLAYURL_API = "https://api.bilibili.com/x/player/wbi/playurl"
 
 
+def resolve_short_link(url: str, *, session: requests.Session | None = None) -> str:
+    """Follow a b23.tv share link to the real /video/<BVID> URL.
+
+    The app's share sheet hands out b23.tv links, so this is the most common form a user
+    will paste. Only a HEAD is needed — the BV id is in the redirect Location. Returns the
+    input unchanged when it isn't a short link, or when the lookup fails (the caller then
+    reports a normal "no BV id" error rather than a confusing network one).
+    """
+    if not _SHORT_RE.match(url or ""):
+        return url
+    sess = session or requests.Session()
+    try:
+        resp = sess.head(
+            url, allow_redirects=True, timeout=15,
+            headers={"User-Agent": _UA, "Referer": _REFERER},
+        )
+    except requests.RequestException:
+        return url
+    for candidate in (resp.url, *(r.headers.get("location", "") for r in resp.history)):
+        if candidate and _BVID_RE.search(candidate):
+            return candidate
+    return url
+
+
 def normalize_bvid(text: str) -> str:
-    """Extract a BV id from a raw id or a full bilibili URL."""
+    """Extract a BV id from a raw id, a full bilibili URL, or a b23.tv share link."""
     m = _BVID_RE.search(text or "")
+    if not m:
+        resolved = resolve_short_link(text or "")
+        m = _BVID_RE.search(resolved)
     if not m:
         raise DownloadError(f"Could not find a BV id in: {text!r}")
     return m.group(1)
@@ -58,7 +87,12 @@ class BilibiliDownloader(Downloader):
 
     # ── interface ───────────────────────────────────────────────────────
     def can_handle(self, url: str) -> bool:
-        return "bilibili.com" in (url or "") or bool(_BVID_RE.search(url or ""))
+        url = url or ""
+        return (
+            "bilibili.com" in url
+            or bool(_SHORT_RE.match(url))  # b23.tv app-share shortener
+            or bool(_BVID_RE.search(url))
+        )
 
     def fetch_metadata(self, url: str) -> VideoMetadata:
         bvid = normalize_bvid(url)

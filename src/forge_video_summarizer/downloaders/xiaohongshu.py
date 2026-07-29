@@ -58,6 +58,39 @@ def extract_note_id(url: str) -> str:
     return m.group(1)
 
 
+# Sentence-ish boundaries used to cut a title out of a note's description.
+_DESC_BREAK_RE = re.compile(r"[。！？!?\n]")
+_TITLE_MAX_CHARS = 40
+_TITLE_MIN_CHARS = 8  # a fragment shorter than this is a lead-in, not a headline
+
+
+def _title_from_desc(desc: str) -> str:
+    """A headline drawn from a note's description, for use as a title.
+
+    Many Xiaohongshu notes leave `title` empty and put the real headline in `desc`, so
+    falling straight back to the note id produces a meaningless workspace name like
+    `6a654e21000000001d022785`.
+
+    Splitting on the FIRST sentence break alone is not enough: these captions often open
+    with a short exclamation ("双眼视力5.0！…"), which on its own says nothing. So we keep
+    consuming sentences until we have something substantial, then cap the length.
+    """
+    cleaned = re.sub(r"#\S+", "", desc or "").strip()
+    if not cleaned:
+        return ""
+    title = ""
+    for part in _DESC_BREAK_RE.split(cleaned):
+        part = part.strip()
+        if not part:
+            continue
+        title = f"{title}｜{part}" if title else part
+        if len(title) >= _TITLE_MIN_CHARS:
+            break
+    if not title:
+        return ""
+    return title if len(title) <= _TITLE_MAX_CHARS else title[:_TITLE_MAX_CHARS].rstrip()
+
+
 class XiaohongshuDownloader(Downloader):
     def __init__(self, cookie: str = "", *, session: requests.Session | None = None):
         self._cookie = cookie
@@ -233,9 +266,10 @@ class XiaohongshuDownloader(Downloader):
                 return None
 
         time_ms = note.get("time")
+        desc = note.get("desc", "")
         return VideoMetadata(
             video_id=note_id,
-            title=note.get("title") or note_id,
+            title=note.get("title") or _title_from_desc(desc) or note_id,
             source_url=url,
             duration=float(duration) if duration else None,
             uploader=user.get("nickname") or user.get("nickName", ""),

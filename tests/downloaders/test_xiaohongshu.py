@@ -228,3 +228,45 @@ def test_note_page_blocked_raises(tmp_path):
     dl = XiaohongshuDownloader(session=sess)
     with pytest.raises(DownloadError, match="__INITIAL_STATE__"):
         dl.fetch_metadata("https://www.xiaohongshu.com/explore/x1?xsec_token=X")
+
+
+# ── title fallback: many notes leave `title` empty and use `desc` ───────────
+
+def test_title_from_desc_joins_until_substantial():
+    from forge_video_summarizer.downloaders.xiaohongshu import _title_from_desc
+    # a short leading exclamation alone is meaningless, so the next clause is joined on
+    got = _title_from_desc("双眼视力5.0！优秀学子圆梦海军航空大学。更多内容。")
+    assert got == "双眼视力5.0｜优秀学子圆梦海军航空大学"
+
+
+def test_title_from_desc_stops_at_one_substantial_sentence():
+    from forge_video_summarizer.downloaders.xiaohongshu import _title_from_desc
+    assert _title_from_desc("Short one. Second sentence here.") == (
+        "Short one. Second sentence here."
+    )
+
+
+def test_title_from_desc_strips_hashtags_and_blanks():
+    from forge_video_summarizer.downloaders.xiaohongshu import _title_from_desc
+    assert _title_from_desc("#标签 #另一个") == ""
+    assert _title_from_desc("") == ""
+    assert _title_from_desc("   ") == ""
+    assert _title_from_desc("！！！") == ""
+
+
+def test_title_from_desc_caps_length():
+    from forge_video_summarizer.downloaders.xiaohongshu import (
+        _TITLE_MAX_CHARS,
+        _title_from_desc,
+    )
+    assert len(_title_from_desc("长" * 200)) <= _TITLE_MAX_CHARS
+
+
+def test_metadata_falls_back_to_desc_then_id():
+    """title -> desc-derived -> note id, in that order."""
+    from forge_video_summarizer.downloaders.xiaohongshu import _title_from_desc
+    note_id = "6a654e21000000001d022785"
+    # no title, useful desc -> desc wins over the meaningless id
+    assert (_title_from_desc("优秀学子圆梦海军航空大学。") or note_id) != note_id
+    # no title, no usable desc -> id is the last resort
+    assert (_title_from_desc("#tag") or note_id) == note_id

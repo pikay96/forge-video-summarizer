@@ -245,3 +245,66 @@ def test_merge_ffmpeg_error(tmp_path):
 def test_make_session_sets_cookie():
     dl = BilibiliDownloader(sessdata="abc;")
     assert dl._session.cookies.get("SESSDATA") == "abc"
+
+
+# ── b23.tv share shortener (what the mobile app actually hands out) ─────────
+
+class _FakeResp:
+    def __init__(self, url, history_locations=()):
+        self.url = url
+        self.history = [
+            type("H", (), {"headers": {"location": loc}})() for loc in history_locations
+        ]
+
+
+def test_can_handle_b23_short_link():
+    from forge_video_summarizer.downloaders.bilibili import BilibiliDownloader
+    d = BilibiliDownloader()
+    assert d.can_handle("https://b23.tv/tL2n2mM")
+    assert d.can_handle("http://b23.tv/abc123")
+
+
+def test_can_handle_still_rejects_other_hosts():
+    from forge_video_summarizer.downloaders.bilibili import BilibiliDownloader
+    d = BilibiliDownloader()
+    assert not d.can_handle("https://xhslink.cn/o/abc")
+    assert not d.can_handle("https://example.com/video")
+
+
+def test_resolve_short_link_reads_bvid_from_final_url():
+    import requests
+
+    from forge_video_summarizer.downloaders.bilibili import resolve_short_link
+
+    class S(requests.Session):
+        def head(self, url, **kw):
+            return _FakeResp("https://www.bilibili.com/video/BV1WLKw6aEDq?x=1")
+
+    got = resolve_short_link("https://b23.tv/tL2n2mM", session=S())
+    assert "BV1WLKw6aEDq" in got
+
+
+def test_resolve_short_link_passes_through_non_short_urls():
+    from forge_video_summarizer.downloaders.bilibili import resolve_short_link
+    url = "https://www.bilibili.com/video/BV1WLKw6aEDq"
+    assert resolve_short_link(url) == url
+
+
+def test_resolve_short_link_survives_network_failure():
+    """A dead short link must degrade to the normal 'no BV id' error, not a stack trace."""
+    import requests
+
+    from forge_video_summarizer.downloaders.bilibili import resolve_short_link
+
+    class S(requests.Session):
+        def head(self, url, **kw):
+            raise requests.RequestException("boom")
+
+    assert resolve_short_link("https://b23.tv/dead", session=S()) == "https://b23.tv/dead"
+
+
+def test_normalize_bvid_raises_for_unresolvable_short_link():
+    from forge_video_summarizer.downloaders.bilibili import normalize_bvid
+    from forge_video_summarizer.errors import DownloadError
+    with pytest.raises(DownloadError):
+        normalize_bvid("not a link at all")
