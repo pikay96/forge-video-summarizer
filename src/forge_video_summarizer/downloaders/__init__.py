@@ -6,6 +6,7 @@ from ..config import Config
 from ..errors import UnsupportedURLError
 from .base import Downloader, DownloadResult
 from .bilibili import BilibiliDownloader, normalize_bvid
+from .douyin import DouyinDownloader, extract_aweme_id
 from .xiaohongshu import XiaohongshuDownloader, extract_note_id
 
 __all__ = [
@@ -13,8 +14,10 @@ __all__ = [
     "Downloader",
     "BilibiliDownloader",
     "XiaohongshuDownloader",
+    "DouyinDownloader",
     "normalize_bvid",
     "extract_note_id",
+    "extract_aweme_id",
     "get_downloader",
     "build_downloaders",
 ]
@@ -25,6 +28,7 @@ def build_downloaders(config: Config) -> list[Downloader]:
     return [
         BilibiliDownloader(sessdata=config.bili_sessdata),
         XiaohongshuDownloader(cookie=config.xhs_cookie),
+        DouyinDownloader(cookie=config.douyin_cookie),
     ]
 
 

@@ -36,6 +36,7 @@ class Config:
 
     bili_sessdata: str = ""
     xhs_cookie: str = ""
+    douyin_cookie: str = ""
     speech_endpoint: str = ""
     speech_key: str = ""
     speech_model: str = "mai-transcribe-1.5"
@@ -80,6 +81,7 @@ def load_config(env_path: str | os.PathLike | None = ".env") -> Config:
     return Config(
         bili_sessdata=env("BILI_SESSDATA", ""),
         xhs_cookie=env("XHS_COOKIE", ""),
+        douyin_cookie=env("DOUYIN_COOKIE", ""),
         speech_endpoint=env("AZURE_SPEECH_ENDPOINT", ""),
         speech_key=env("AZURE_SPEECH_KEY", ""),
         speech_model=env("AZURE_SPEECH_MODEL", "mai-transcribe-1.5"),

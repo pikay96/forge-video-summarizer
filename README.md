@@ -49,6 +49,8 @@ Copy `.env.example` to `.env` and set:
 
 - `BILI_SESSDATA` — SESSDATA cookie from a logged-in bilibili session (only auth needed).
 - `XHS_COOKIE` — optional Cookie for Xiaohongshu; usually blank (video pages are public).
+- `DOUYIN_COOKIE` — optional Cookie for Douyin; usually blank (credentials are bootstrapped
+  automatically at runtime). Set it only if you start hitting the anti-bot wall.
 - `AZURE_SPEECH_ENDPOINT` / `AZURE_SPEECH_KEY` — Azure Speech (fast transcription).
   `AZURE_SPEECH_MODEL` (optional) sets the enhanced model, default `mai-transcribe-1.5`.
 - `AZURE_OPENAI_ENDPOINT` / `AZURE_OPENAI_API_KEY` / `AZURE_OPENAI_DEPLOYMENT` — summarization.
@@ -87,6 +89,11 @@ Flags: `--output <dir>` (default `output/`), `--force` (ignore cache), `--env <p
      note page's `__INITIAL_STATE__`, pull the single progressive MP4
      (`originVideoKey` → CDN, or the highest-res stream). No login required; an optional
      `XHS_COOKIE` helps if you hit an anti-bot wall. **Video posts only.**
+   - **Douyin (抖音)** — resolve `v.douyin.com` share links, then call the signed web detail
+     API (`/aweme/v1/web/aweme/detail/`). The page HTML carries no video data, and unsigned
+     requests answer HTTP 200 with an *empty body*, so requests are signed with a vendored
+     `a_bogus` implementation plus a `ttwid` cookie fetched at runtime — no login required.
+     Prefers the h264 stream so ffmpeg behaves downstream. **Video posts only.**
 
    Always keeps the full video (planned visual capability needs it). Rich `metadata.json`
    sidecar. Adding a site = one class implementing `Downloader` + a line in the registry.

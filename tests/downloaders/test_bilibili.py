@@ -155,11 +155,17 @@ def test_get_downloader_selects_bilibili():
 
 
 def test_build_downloaders_returns_list():
-    from forge_video_summarizer.downloaders import build_downloaders
+    from forge_video_summarizer.downloaders import (
+        DouyinDownloader,
+        XiaohongshuDownloader,
+        build_downloaders,
+    )
     dls = build_downloaders(Config())
     assert isinstance(dls[0], BilibiliDownloader)
-    # bilibili + xiaohongshu are both registered
-    assert len(dls) == 2
+    # Assert on which downloaders are registered, not how many — a bare count
+    # breaks every time a platform is added without catching anything real.
+    kinds = {type(d) for d in dls}
+    assert kinds == {BilibiliDownloader, XiaohongshuDownloader, DouyinDownloader}
 
 
 def test_view_api_network_error():
