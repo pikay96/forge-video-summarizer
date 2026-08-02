@@ -144,14 +144,27 @@ class DouyinDownloader(Downloader):
 
     # ── internals ───────────────────────────────────────────────────────
     def _resolve(self, url: str) -> str:
-        """Follow a v.douyin.com share link to the canonical /video/<id> URL."""
+        """Follow a v.douyin.com share link to the canonical /video/<id> URL.
+
+        Done on a THROWAWAY session, like the ttwid registration. The redirect
+        chain sets `__ac_nonce` and a *challenge* `ttwid` on whatever session
+        follows it, which marks that session as pending anti-bot verification —
+        every later signed API call then returns HTTP 200 with an empty body.
+        Worse, the planted `ttwid` made `_bootstrap_credentials` believe it
+        already had a good cookie and skip fetching a real one, so a share link
+        failed while the equivalent direct URL succeeded.
+        """
         if not _SHORT_RE.match(url or ""):
             return url
+        throwaway = requests.Session()
+        throwaway.headers.update({"User-Agent": _UA})
         try:
-            resp = self._session.get(url, allow_redirects=True, timeout=20)
+            resp = throwaway.get(url, allow_redirects=True, timeout=20)
+            return resp.url or url
         except requests.RequestException:
             return url
-        return resp.url or url
+        finally:
+            throwaway.close()
 
     def _bootstrap_credentials(self) -> None:
         """Obtain the ttwid cookie Douyin requires before it will answer.

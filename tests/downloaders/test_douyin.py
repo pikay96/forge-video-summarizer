@@ -208,3 +208,28 @@ def test_explicit_cookie_is_loaded_into_the_session():
     d.fetch_metadata(f"https://www.douyin.com/video/{AWEME_ID}")
     assert session.cookies.get("ttwid") == "abc"
     assert session.cookies.get("sessionid") == "xyz"
+
+
+def test_short_link_resolution_does_not_touch_the_api_session():
+    """Regression: resolving v.douyin.com on the API session breaks the API call.
+
+    The redirect chain plants `__ac_nonce` and a *challenge* `ttwid`. That marks
+    the session as pending anti-bot verification (later signed calls return an
+    empty body), AND the planted ttwid made _bootstrap_credentials think it
+    already had a good cookie, so it skipped fetching a real one. Net effect: a
+    share link failed while the equivalent direct URL worked. Resolution must
+    therefore happen on a throwaway session.
+    """
+    session = _FakeSession({"aweme_detail": DETAIL})
+    d = DouyinDownloader(session=session)
+    d._resolve("https://v.douyin.com/Na457zvLCKo/")
+    assert session.gets == []          # never used the API session
+    assert list(session.cookies) == []  # and planted nothing on it
+
+
+def test_resolve_passes_through_canonical_urls():
+    session = _FakeSession({"aweme_detail": DETAIL})
+    d = DouyinDownloader(session=session)
+    url = f"https://www.douyin.com/video/{AWEME_ID}"
+    assert d._resolve(url) == url
+    assert session.gets == []
