@@ -109,6 +109,12 @@ Flags: `--output <dir>` (default `output/`), `--force` (ignore cache), `--env <p
    length scales with duration, one `[MM:SS]` anchor per meaningful topic shift. Then a
    **dedicated second pass** authors an **Excalidraw overview image** from the finished
    summary and renders it to `overview.png` (see below).
+   - **Optional `--language zh|en`** (alias `--lang`): force the summary's output language,
+     including headings and Q&A. Default follows the transcript's *dominant* language,
+     which is usually right but surprises you on mixed-language content — e.g. a Chinese
+     host interviewing an English speaker can be 97% English, so the summary comes out
+     English. Available on both `summarize` and `summarize-transcript`, so you can switch
+     language without re-downloading or re-transcribing.
    - **Optional `--slides`** (for slide/PPT-style talks): scene-detect distinct slides,
      pick the frame whose caption hides the least, and let the vision model choose the KEY
      slides and place each next to the point it illustrates (as `![slide@MM:SS]`).

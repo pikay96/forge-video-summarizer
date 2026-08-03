@@ -97,3 +97,58 @@ def test_summarize_unextractable_response_raises(config):
     client = FakeClient(resp)
     with pytest.raises(SummarizationError, match="extract"):
         summarize_transcript(_transcript(), config, client=client)
+
+
+# ── forced output language (--language) ─────────────────────────────────────
+
+def _mini_transcript():
+    from forge_video_summarizer.models import Transcript, TranscriptSegment
+    return Transcript(
+        segments=[TranscriptSegment(start=0.0, duration=2.0, text="hello world")],
+        locale="en-US",
+    )
+
+
+def test_prompt_has_no_language_directive_by_default():
+    """Default must stay 'dominant language' — no override leaking in."""
+    from forge_video_summarizer.stages.summarize import build_prompt
+    prompt = build_prompt(_mini_transcript(), None)
+    assert "OUTPUT LANGUAGE" not in prompt
+
+
+def test_prompt_states_language_first_when_forced():
+    """The directive must precede the transcript, or a long transcript in the
+    other language drowns it out."""
+    from forge_video_summarizer.stages.summarize import build_prompt
+    prompt = build_prompt(_mini_transcript(), None, language="zh")
+    assert prompt.startswith("OUTPUT LANGUAGE")
+    assert "简体中文" in prompt
+    assert prompt.index("OUTPUT LANGUAGE") < prompt.index("TRANSCRIPT")
+
+
+def test_prompt_language_english():
+    from forge_video_summarizer.stages.summarize import build_prompt
+    prompt = build_prompt(_mini_transcript(), None, language="en")
+    assert "in English" in prompt
+
+
+def test_language_choices_exposed_for_the_cli():
+    from forge_video_summarizer.stages.summarize import LANGUAGE_CHOICES
+    assert set(LANGUAGE_CHOICES) == {"zh", "en"}
+
+
+def test_summarize_transcript_passes_language_through(monkeypatch):
+    from forge_video_summarizer.config import Config
+    from forge_video_summarizer.stages import summarize as mod
+
+    seen = {}
+
+    def fake_call(client, config, system, prompt):
+        seen["prompt"] = prompt
+        return "# out"
+
+    monkeypatch.setattr(mod, "call_responses", fake_call)
+    cfg = Config(openai_endpoint="https://x", openai_key="k")
+    mod.summarize_transcript(_mini_transcript(), cfg, client=object(), language="zh")
+    assert seen["prompt"].startswith("OUTPUT LANGUAGE")
+    assert "简体中文" in seen["prompt"]

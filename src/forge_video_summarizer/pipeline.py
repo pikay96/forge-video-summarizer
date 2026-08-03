@@ -118,6 +118,7 @@ class Pipeline:
         *,
         force: bool = False,
         slides: bool = False,
+        language: str | None = None,
     ) -> Path:
         if Workspace.should_skip(ws.summary_path, force):
             return ws.summary_path
@@ -126,7 +127,9 @@ class Pipeline:
             json.loads(ws.transcript_json_path.read_text("utf-8"))
         )
         metadata = self._read_metadata(ws)
-        summary = summarize_transcript(transcript, self.config, metadata=metadata)
+        summary = summarize_transcript(
+            transcript, self.config, metadata=metadata, language=language
+        )
 
         # Overview image (always-on): a dedicated second pass renders an Excalidraw scene
         # to overview.png, embedded at the top of the Notion page on export. Best-effort —
@@ -192,17 +195,21 @@ class Pipeline:
         force: bool = False,
         export: bool = False,
         slides: bool = False,
+        language: str | None = None,
     ) -> Path:
         """Full pipeline: source (URL or local file) -> summary.md path.
         When export=True, also publishes to Notion (Stage 5).
-        When slides=True, extracts slide screenshots into the Walkthrough."""
+        When slides=True, extracts slide screenshots into the Walkthrough.
+        When language is set ("zh"/"en"), forces the summary's output language."""
         if _looks_like_url(source):
             ws = self.run_download(source, force=force)
         else:
             ws = self.workspace_for_local(source)
         self.run_extract(ws, force=force)
         self.run_transcribe(ws, force=force)
-        summary_path = self.run_summarize(ws, force=force, slides=slides)
+        summary_path = self.run_summarize(
+            ws, force=force, slides=slides, language=language
+        )
         if export:
             self.run_export(ws, force=force)
         return summary_path

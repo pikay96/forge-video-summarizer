@@ -16,7 +16,20 @@ from ..errors import SummarizationError
 from ..models import Transcript, VideoMetadata
 from ._openai import call_responses, make_client
 
-__all__ = ["summarize_transcript", "build_prompt", "SYSTEM_INSTRUCTIONS"]
+__all__ = [
+    "summarize_transcript",
+    "build_prompt",
+    "SYSTEM_INSTRUCTIONS",
+    "LANGUAGE_CHOICES",
+]
+
+# Accepted --language values. Names are spelled out for the prompt because a
+# bare code ("zh") is ambiguous to the model about script and register.
+_LANGUAGE_NAMES = {
+    "zh": "Chinese (简体中文)",
+    "en": "English",
+}
+LANGUAGE_CHOICES = tuple(_LANGUAGE_NAMES)
 
 SYSTEM_INSTRUCTIONS = """\
 You are an expert teacher and note-taker. You turn a video transcript into a written
@@ -65,10 +78,28 @@ derivation is a failure, even if the prose reads well.
 """
 
 
-def build_prompt(transcript: Transcript, metadata: VideoMetadata | None) -> str:
-    """Assemble the user input: title/duration context + timestamped transcript."""
+def build_prompt(
+    transcript: Transcript,
+    metadata: VideoMetadata | None,
+    *,
+    language: str | None = None,
+) -> str:
+    """Assemble the user input: title/duration context + timestamped transcript.
+
+    `language` overrides the default "dominant language" behaviour. It is stated
+    as an explicit instruction at the TOP of the prompt (not appended) so it is
+    read before the transcript, which is what makes it stick against a long
+    transcript in the other language.
+    """
     title = metadata.title if metadata else ""
     parts = []
+    if language:
+        label = _LANGUAGE_NAMES.get(language, language)
+        parts.append(
+            f"OUTPUT LANGUAGE: Write the ENTIRE summary in {label}, including every "
+            "heading, bullet, and the Q&A — regardless of what language the transcript "
+            "is in. Translate the content; do not merely transcribe it."
+        )
     if title:
         parts.append(f"VIDEO TITLE: {title}")
     if metadata and metadata.duration:
@@ -89,14 +120,19 @@ def summarize_transcript(
     *,
     metadata: VideoMetadata | None = None,
     client: Any | None = None,
+    language: str | None = None,
 ) -> str:
-    """Summarize a transcript into markdown. `client` injectable for testing."""
+    """Summarize a transcript into markdown. `client` injectable for testing.
+
+    `language` (e.g. "zh" / "en") forces the output language; None keeps the
+    default of following the transcript's dominant language.
+    """
     config.require_openai()
     if not transcript.segments:
         raise SummarizationError("Transcript is empty; nothing to summarize")
 
     client = client or make_client(config)
-    prompt = build_prompt(transcript, metadata)
+    prompt = build_prompt(transcript, metadata, language=language)
     summary = call_responses(client, config, SYSTEM_INSTRUCTIONS, prompt)
     if not summary:
         raise SummarizationError("Could not extract text from the model response")

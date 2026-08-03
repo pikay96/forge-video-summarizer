@@ -8,6 +8,7 @@ import sys
 from .config import load_config
 from .errors import ForgeError
 from .pipeline import Pipeline, _looks_like_url
+from .stages.summarize import LANGUAGE_CHOICES
 
 __all__ = ["main", "build_parser"]
 
@@ -42,6 +43,14 @@ def build_parser() -> argparse.ArgumentParser:
             )
         if name in ("summarize", "summarize-transcript"):
             p.add_argument(
+                "--language", "--lang", dest="language",
+                choices=LANGUAGE_CHOICES, default=None,
+                help=(
+                    "force the summary's output language (zh/en); "
+                    "default follows the transcript's dominant language"
+                ),
+            )
+            p.add_argument(
                 "--slides", action="store_true",
                 help="extract slide screenshots into the Walkthrough (for slide/PPT talks)",
             )
@@ -62,7 +71,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command == "summarize":
             out = pipeline.run_all(
-                args.source, force=force, export=args.export, slides=args.slides,
+                args.source, force=force, export=args.export,
+                slides=args.slides, language=args.language,
             )
             print(f"Summary written: {out}")
             if args.export:
@@ -80,7 +90,9 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Transcript: {ws.transcript_txt_path}")
         elif args.command == "summarize-transcript":
             ws = _workspace_for(pipeline, args.source, force=force)
-            out = pipeline.run_summarize(ws, force=force, slides=args.slides)
+            out = pipeline.run_summarize(
+                ws, force=force, slides=args.slides, language=args.language
+            )
             print(f"Summary written: {out}")
         elif args.command == "export":
             ws = _workspace_for(pipeline, args.source, force=force)
