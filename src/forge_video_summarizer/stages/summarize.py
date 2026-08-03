@@ -98,7 +98,19 @@ def build_prompt(
         parts.append(
             f"OUTPUT LANGUAGE: Write the ENTIRE summary in {label}, including every "
             "heading, bullet, and the Q&A — regardless of what language the transcript "
-            "is in. Translate the content; do not merely transcribe it."
+            "is in. Translate the content; do not merely transcribe it.\n"
+            "TERMINOLOGY: When the transcript is in a different language and you "
+            "translate a term whose meaning translation could blur — technical or "
+            "domain terms, named methods/models/tools, metrics, and coined phrases the "
+            "speaker leans on — write it as translated(original), e.g. "
+            "注意力机制(attention mechanism). Give the original ONCE, at the term's first "
+            "appearance, then use the translation alone. Do NOT annotate ordinary words "
+            "that translate cleanly; the goal is a reader who can map the idea back to "
+            "the source, not a bilingual transcript. Proper nouns with no established "
+            "translation (people, brands, product names) stay in the original.\n"
+            "HEADINGS: Translate the section headings too, including \"TL;DR\" — render it "
+            "with the natural equivalent in the output language rather than leaving the "
+            "English abbreviation."
         )
     if title:
         parts.append(f"VIDEO TITLE: {title}")

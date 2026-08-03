@@ -152,3 +152,39 @@ def test_summarize_transcript_passes_language_through(monkeypatch):
     mod.summarize_transcript(_mini_transcript(), cfg, client=object(), language="zh")
     assert seen["prompt"].startswith("OUTPUT LANGUAGE")
     assert "简体中文" in seen["prompt"]
+
+
+def test_forced_language_asks_for_original_terms_in_parens():
+    """Translation can blur technical terms, so keep the source term alongside."""
+    from forge_video_summarizer.stages.summarize import build_prompt
+    prompt = build_prompt(_mini_transcript(), None, language="zh")
+    assert "TERMINOLOGY" in prompt
+    assert "translated(original)" in prompt
+    # first occurrence only — otherwise the summary reads as a bilingual transcript
+    assert "ONCE" in prompt
+    # ordinary vocabulary must not get annotated
+    assert "Do NOT annotate ordinary words" in prompt
+
+
+def test_terminology_rule_absent_without_forced_language():
+    """No override -> output is already in the source language, nothing to gloss."""
+    from forge_video_summarizer.stages.summarize import build_prompt
+    prompt = build_prompt(_mini_transcript(), None)
+    assert "TERMINOLOGY" not in prompt
+
+
+def test_terminology_example_is_not_video_specific():
+    """Standing rule: no prompt content tuned to one particular video."""
+    from forge_video_summarizer.stages.summarize import build_prompt
+    prompt = build_prompt(_mini_transcript(), None, language="zh")
+    assert "glycemic" not in prompt.lower()
+
+
+def test_forced_language_translates_the_tldr_heading():
+    """"TL;DR" is an English literal in the section spec, so it survives
+    translation unless called out — the other headings translate, leaving one
+    inconsistent English heading."""
+    from forge_video_summarizer.stages.summarize import build_prompt
+    prompt = build_prompt(_mini_transcript(), None, language="zh")
+    assert "HEADINGS" in prompt
+    assert "TL;DR" in prompt.split("HEADINGS")[1]
