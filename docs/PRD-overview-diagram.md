@@ -1,3 +1,5 @@
+> Historical specification: this document includes earlier designs or proposals, not necessarily current behavior. See the [documentation index](README.md) for the current guides.
+
 # PRD — Overview diagram (Mermaid) in the summary
 
 > **SUPERSEDED 2026-07:** the overview was switched from Mermaid to an **Excalidraw image**.

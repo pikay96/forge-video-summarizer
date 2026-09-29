@@ -1,188 +1,141 @@
-# forge-video-summarizer
+# Forge Video Summarizer
 
-Local-capable video-to-summary pipeline. Five independent stages, each a clean
-function with a file handoff so any stage is re-runnable and cacheable.
+**Turn videos into illustrated notes—with clear explanations, selected screenshots, and concept maps.**
 
+A personal Python application for turning talks, tutorials, and other videos into material you can revisit. Instead of returning only a short recap, it organizes ideas by topic, explains the key concepts, and adds takeaways and review questions. Optional screenshots retain useful visual context; Notion export brings the result into a notebook.
+
+**Stack:** Python · FFmpeg · Azure Speech · Azure OpenAI · Excalidraw · Notion
+
+[Run locally](#run-locally) · [Engineering notes](docs/engineering.md) · [Development guide](docs/development.md) · [Verification](docs/verification/README.md)
+
+## What you get
+
+- **Topic-based notes:** an overview, key takeaways, explanations organized by concept rather than chronology, and review questions.
+- **A concept map:** a separate model pass creates an Excalidraw overview image when the optional renderer is installed.
+- **Selected screenshots:** `--slides` selects frames from slide-style recordings to illustrate the notes. Selection and placement need review.
+- **Language control:** follow the transcript's dominant language, or explicitly request English or Chinese.
+- **Optional Notion export:** native text blocks, available images, source metadata, and a video embed.
+
+Generated names and claims still need checking. This is a learning aid, not exact subtitles or automatic fact checking.
+
+### Inspectable output
+
+```text
+output/<title>[<video-id>]/
+  video.mp4            Full source video; extension may vary
+  metadata.json        Source details
+  audio.wav            Extracted audio
+  transcript.json      Transcription payload; merged for chunked input
+  transcript.txt       Readable text with approximate sentence anchors
+  summary.md           Structured notes
+  overview.excalidraw  Optional concept-map scene
+  overview.png         Optional rendered concept map
+  slides/              Optional captured frames
+  notion_url.txt       Created after Notion export
 ```
-video URL / local file
-   │  per-site downloader (bilibili / Xiaohongshu)         → video.mp4 + metadata.json
-   ▼
-audio.wav (16 kHz mono)  │  ffmpeg
-   │
-   ▼  transcribe model  (Azure Speech fast transcription, MAI enhanced — best zh/en text)
-transcript.json + transcript.txt (segment timestamps)
-   │
-   ▼  LLM summarize      (Azure OpenAI Responses API)
-summary.md   (teacher-clear + interview-ready, [MM:SS] anchors)
-   │
-   ▼  export             (Notion SDK)
-Notion subpage   (embedded video + metadata + summary, clickable timestamp links)
+
+This is an artifact map, not a captured demo. A curated, redistributable example is not yet included; use your own local video to inspect the workflow. The [verification record](docs/verification/README.md) separates software checks from live-service and content-quality evaluation.
+
+## How it works
+
+```text
+Local video / supported URL
+          |
+          v
+Acquire video -> Extract audio -> Transcribe -> Write notes
+                                                  |
+                                  +---------------+---------------+
+                                  |                               |
+                           Overview image                  Selected frames
+                           (optional tooling)              (--slides)
+                                  |                               |
+                                  +---------------+---------------+
+                                                  |
+                                        Notion export (--export)
 ```
 
-## Install
+Five stages communicate through files in a per-video workspace. The process runs synchronously on one machine; transcription and generation use cloud services. Intermediate artifacts let you inspect failures and reuse completed work without a database or job service.
+
+**Inputs:** local video files, Bilibili, Xiaohongshu / RedNote, and Douyin video posts. Platform changes, login requirements, and network restrictions can interrupt URL downloads. Local files are the most predictable starting point. YouTube URLs, playlists, image galleries, and live streams are not supported.
+
+## Engineering decisions
+
+- **Preserve intermediate artifacts.** Files make failures and generated results inspectable. The tradeoff is disk usage and existence-based caching rather than automatic dependency invalidation.
+- **Favor readable multilingual transcription.** Enhanced transcription is used for text quality; sentence timing may be interpolated. Anchors are navigation hints, not precise evidence alignment.
+- **Separate prose and diagram generation.** A second request focuses on the concept map. Rendering validates the scene, not the factual correctness of its relationships.
+- **Use original frames.** A vision model selects sampled screenshots; exported images are not cropped or masked. Sampling and placement can still miss the right content.
+- **Keep visuals best-effort.** A renderer or screenshot-selection failure can degrade to text notes rather than fail the whole task.
+
+The [engineering notes](docs/engineering.md) explain these decisions, their failure modes, and proposed improvements with links to implementation. The [AI-assisted workflow](workflow.md) distinguishes development assistance and manual review from shipped application features.
+
+## Run locally
+
+Requires Python **3.10+**, `ffmpeg`, `ffprobe`, Azure Speech credentials, and an Azure OpenAI deployment supporting the Responses API. The recorded validation uses Python 3.11. Cloud calls may incur charges.
 
 ```bash
-python -m venv .venv && . .venv/bin/activate
-pip install -e ".[dev]"
-cp .env.example .env      # then fill in credentials
+git clone https://github.com/pikay96/forge-video-summarizer.git
+cd forge-video-summarizer
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -e ".[dev]"
+cp .env.example .env
 ```
 
-Requires `ffmpeg` (and `ffprobe`) on PATH. On WSL/Linux without root, a static build
-works: download from https://johnvansickle.com/ffmpeg/, then drop `ffmpeg`/`ffprobe`
-into `~/.local/bin`. (A Windows `ffmpeg.exe` reached via `/mnt/c` PATH can raise
-`PermissionError` under WSL — prefer a native Linux binary.)
+The clone requires access while the repository is private. On Windows PowerShell use `.venv\Scripts\Activate.ps1`. Fill in the Azure Speech and Azure OpenAI fields in `.env`; see the [configuration guide](docs/development.md#configuration) for endpoint shapes and optional services.
 
-**Optional — overview image renderer.** Each summary gets an auto-generated **Excalidraw
-overview image** (see [Overview image](#overview-image)). Rendering needs a Node CLI plus a
-headless browser (one-time):
+Replace the example path with a video you own or are authorized to process:
 
 ```bash
-npm install                              # installs excalidraw-brute-export-cli
-npx playwright install chromium firefox  # headless browsers it drives
+# Write English notes for a local video.
+fvs summarize /path/to/talk.mp4 --language en
+
+# For a different, slide-based recording, also select screenshots.
+fvs summarize /path/to/another-talk.mp4 --language en --slides
 ```
 
-If the renderer is absent the pipeline still runs — it just skips the overview image.
-
-## Configure
-
-Copy `.env.example` to `.env` and set:
-
-- `BILI_SESSDATA` — SESSDATA cookie from a logged-in bilibili session (only auth needed).
-- `XHS_COOKIE` — optional Cookie for Xiaohongshu; usually blank (video pages are public).
-- `DOUYIN_COOKIE` — optional Cookie for Douyin; usually blank (credentials are bootstrapped
-  automatically at runtime). Set it only if you start hitting the anti-bot wall.
-- `AZURE_SPEECH_ENDPOINT` / `AZURE_SPEECH_KEY` — Azure Speech (fast transcription).
-  `AZURE_SPEECH_MODEL` (optional) sets the enhanced model, default `mai-transcribe-1.5`.
-- `AZURE_OPENAI_ENDPOINT` / `AZURE_OPENAI_API_KEY` / `AZURE_OPENAI_DEPLOYMENT` — summarization.
-- `NOTION_API_KEY` / `NOTION_PARENT_PAGE_ID` — Notion export (Stage 5). The integration
-  must be connected to the parent page (page ••• → Connections). `NOTION_PARENT_PAGE_ID`
-  accepts a bare id, dashed UUID, or a full Notion page URL.
-
-## Usage
-
-End-to-end (the common case):
+For overview images, install the optional renderer **before** generating a new summary:
 
 ```bash
-fvs summarize https://www.bilibili.com/video/BV1xxxxxxx
-fvs summarize /path/to/local/video.mp4
-fvs summarize <url> --export        # also publish to Notion (Stage 5)
+npm ci
+npx playwright install chromium firefox
 ```
 
-Per-stage (each consumes the previous stage's file output):
+Inspect `summary.md`, the transcript, and the images before publishing. The overview is a separate file; screenshot placeholders become images during Notion export. Local Markdown is not a standalone image gallery.
+
+After configuring a Notion integration and connecting it to the parent page:
 
 ```bash
-fvs download   <bilibili-url>      # Stage 1 → video.mp4 + metadata.json
-fvs extract    <url|local-file>    # Stage 2 → audio.wav
-fvs transcribe <url|local-file>    # Stage 3 → transcript.json + .txt
-fvs summarize-transcript <url|local-file>   # Stage 4 → summary.md
-fvs export     <url|local-file>    # Stage 5 → Notion subpage (needs summary.md)
+fvs export /path/to/talk.mp4
 ```
 
-Flags: `--output <dir>` (default `output/`), `--force` (ignore cache), `--env <path>`.
+**Two important behaviors:**
 
-## Stages
+- Changing language, model, or `--slides` does not invalidate existing output. See [stage-level reuse](docs/development.md#stage-level-reuse); `--force` goes before the subcommand and may repeat paid work.
+- Re-export can archive the matching Notion page and create another, changing the URL and not preserving edits on the old page. It is not an atomic update. Verify the result before sharing.
 
-1. **Download** — hand-written per-site downloaders behind a pluggable interface,
-   picked by URL:
-   - **bilibili** — SESSDATA auth, `view` → `playurl` DASH → ffmpeg mux.
-   - **Xiaohongshu / RedNote (小红书)** — resolve `xhslink.com` short links, parse the
-     note page's `__INITIAL_STATE__`, pull the single progressive MP4
-     (`originVideoKey` → CDN, or the highest-res stream). No login required; an optional
-     `XHS_COOKIE` helps if you hit an anti-bot wall. **Video posts only.**
-   - **Douyin (抖音)** — resolve `v.douyin.com` share links, then call the signed web detail
-     API (`/aweme/v1/web/aweme/detail/`). The page HTML carries no video data, and unsigned
-     requests answer HTTP 200 with an *empty body*, so requests are signed with a vendored
-     `a_bogus` implementation plus a `ttwid` cookie fetched at runtime — no login required.
-     Prefers the h264 stream so ffmpeg behaves downstream. **Video posts only.**
-
-   Always keeps the full video (planned visual capability needs it). Rich `metadata.json`
-   sidecar. Adding a site = one class implementing `Downloader` + a line in the registry.
-2. **Extract audio** — `ffmpeg` → 16 kHz mono PCM WAV (the format the fast-transcription
-   endpoint accepts directly). No normalization/trimming (keeps the timeline identical so
-   anchors stay accurate).
-3. **Transcribe** — Azure Speech **fast transcription** with **enhancedMode (MAI)** for
-   best mixed zh/en text quality (recovers inline English terms + punctuation). ~9s for
-   a 27-min video. MAI returns one block, so per-segment `[MM:SS]` anchors are
-   interpolated (approximate — transcript.txt says so); transcript.json keeps the raw
-   response as source of truth.
-4. **Summarize** — Azure OpenAI Responses API. Teacher-clear + interview-ready markdown,
-   length scales with duration, one `[MM:SS]` anchor per meaningful topic shift. Then a
-   **dedicated second pass** authors an **Excalidraw overview image** from the finished
-   summary and renders it to `overview.png` (see below).
-   - **Optional `--language zh|en`** (alias `--lang`): force the summary's output language,
-     including headings and Q&A. Default follows the transcript's *dominant* language,
-     which is usually right but surprises you on mixed-language content — e.g. a Chinese
-     host interviewing an English speaker can be 97% English, so the summary comes out
-     English. Available on both `summarize` and `summarize-transcript`, so you can switch
-     language without re-downloading or re-transcribing.
-   - **Optional `--slides`** (for slide/PPT-style talks): scene-detect distinct slides,
-     pick the frame whose caption hides the least, and let the vision model choose the KEY
-     slides and place each next to the point it illustrates (as `![slide@MM:SS]`).
-     Real slide screenshots embedded inline — kept *in addition to* the overview image.
-     **Frames are embedded exactly as captured — never cropped, never masked.** On-screen
-     captions are handled by picking a different moment, not by editing pixels: cropping
-     and masking were tried and removed because they destroyed real slide content.
-     Best-effort; never blocks the summary.
-5. **Export** — publishes `summary.md` to Notion as a **subpage** of a configured parent
-   page (official `notion-client` SDK). Each page carries the **overview image** (uploaded
-   via Notion `file_uploads`) at the top, an embedded bilibili video, a metadata callout,
-   and the summary as native blocks; `[MM:SS]` anchors are plain text (bilibili's web
-   player ignores `?t=` deep links). Idempotent (dedups by video-id marker in the title,
-   archives + recreates) and chunks block appends at Notion's 100-per-request limit. Audio
-   and transcript are intentionally excluded.
-
-## Overview image
-
-Every summary gets an auto-generated **Excalidraw overview image** — a clean, hand-drawn
-concept map of the video's key ideas and how they relate, embedded at the top of the Notion
-page. It's produced in a **dedicated second model pass** (after the prose summary): the model
-authors an Excalidraw scene (structured JSON — real labels, correct relationships, in the
-summary's dominant language), which is rendered to `overview.png` and uploaded to Notion.
-
-Excalidraw is used deliberately over Mermaid (whose auto-layout came out cramped/hard to
-read) and over image generation (which invents garbled labels on technical content): the
-model authors a **structured** scene, so labels are faithful while the layout is clean and
-readable. Rendering uses `excalidraw-brute-export-cli` (headless browser); if it's absent the
-step degrades gracefully and the summary ships without the image.
-
-## Layout
-
-```
-src/forge_video_summarizer/
-├── cli.py            # subcommand CLI
-├── pipeline.py       # orchestration + caching/file-handoff
-├── config.py         # .env loading
-├── workspace.py      # per-video dir, title sanitize, artifact paths
-├── models.py         # VideoMetadata, Transcript, TranscriptSegment
-├── errors.py         # typed exceptions
-├── downloaders/      # pluggable per-site (base + bilibili + xiaohongshu + registry)
-├── prompts/          # vendored excalidraw specialist instruction (package data)
-└── stages/           # extract, transcribe, summarize, diagram, export_notion
-tests/                # unit tests (network/subprocess/Notion API/renderer mocked)
-```
-
-## Test
+## Validation and limitations
 
 ```bash
-pytest --cov=forge_video_summarizer --cov-report=term-missing
+python -m pytest --cov=forge_video_summarizer --cov-report=term-missing
 ruff check src tests
 ```
 
-## Debugging (VS Code F5)
+The [recorded local run](docs/verification/README.md) passed **254 tests**, reported **90% statement coverage**, and passed Ruff. These are commit-scoped software checks, not summary-accuracy scores or a live-service benchmark.
 
-`.vscode/` is committed. Open the folder and press **F5** — configurations are provided
-for: run current file, run the CLI (`summarize` with a URL/path prompt), pytest current
-file, and pytest all. `.vscode/.env` sets `PYTHONPATH=src` so imports resolve before an
-editable install. Also runnable as a module: `python -m forge_video_summarizer …`.
+The application currently handles one video per run. Long audio is split for transcription, but the full transcript still goes into one summarization request. There is no batch scheduler, hosted UI, conversational agent, or retrieval index. Timestamp drift, missed frames, and incorrect screenshot placement remain possible. Interactive browser login and case-specific corrections are manual operations, not CLI features.
 
-## Docs
+## Privacy and attribution
 
-- PRD: [`docs/prds/video-summarizer-v1-prd.md`](docs/prds/video-summarizer-v1-prd.md)
-- Stage 5 PRD: [`docs/PRD-stage5-notion-export.md`](docs/PRD-stage5-notion-export.md)
-- Implementation spec: [`docs/implementation.md`](docs/implementation.md)
+Local execution is not local-only processing: audio goes to Azure Speech; text and optional screenshots go to Azure OpenAI; Notion export sends notes, metadata, and images. Overview rendering loads the external Excalidraw application. No application-level redaction or automatic retention policy is implemented.
 
-## Scope (v1)
+Do not commit credentials, cookies, private recordings, or generated personal notes. Review exported metadata for local paths and signed URLs before sharing. Process only authorized media and follow source-platform terms.
 
-Single video in → single summary out. No batch/playlist, no live streams, no
-authenticated/private videos. Chunking (long audio) and map-reduce (long transcript)
-are documented extension points, not built in v1.
+Downloader work draws on [bilibili-video-downloader](https://github.com/lanyeeee/bilibili-video-downloader), [XHS-Downloader](https://github.com/JoeanAmier/XHS-Downloader), and [douyin-downloader](https://github.com/jiji262/douyin-downloader). The [Douyin signer header](src/forge_video_summarizer/downloaders/_abogus.py) identifies vendored code. Attribution does not replace a distribution-license review; there is currently no top-level license file.
+
+## Further reading
+
+- [Engineering notes](docs/engineering.md): decisions, tradeoffs, and source links.
+- [Development guide](docs/development.md): configuration, stage commands, and troubleshooting.
+- [Verification](docs/verification/README.md): recorded checks and an output-review checklist.
+- [AI-assisted workflow](workflow.md): specifications, tests, and real-input review.
+- [Documentation index](docs/README.md): current guides and historical specifications.

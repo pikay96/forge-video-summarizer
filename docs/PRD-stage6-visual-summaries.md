@@ -1,3 +1,5 @@
+> Historical specification: this document includes earlier designs or proposals, not necessarily current behavior. See the [documentation index](README.md) for the current guides.
+
 # PRD — Stage 6 (optional): Visual summaries (see-the-video + inline images)
 
 **Status:** Draft · **Owner:** Pikay · **Depends on:** Stage 1 (video.mp4), Stage 3

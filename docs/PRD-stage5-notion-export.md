@@ -1,3 +1,5 @@
+> Historical specification: this document includes earlier designs or proposals, not necessarily current behavior. See the [documentation index](README.md) for the current guides.
+
 # PRD — Stage 5: Export to Notion
 
 **Status:** Draft · **Owner:** Pikay · **Depends on:** Stage 4 (summary.md)
