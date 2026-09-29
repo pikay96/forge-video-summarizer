@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "forge-video-summarizer"
 version = "1.0.0"
-description = "Local-capable video-to-summary pipeline: download -> extract -> transcribe -> summarize -> export"
+description = "Turn videos into structured notes with explanations, selected screenshots, and optional Notion export"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [

@@ -1,3 +1,5 @@
+> Historical specification: this document includes earlier designs or proposals, not necessarily current behavior. See the [documentation index](../README.md) for the current guides.
+
 # Video Summarizer - Product Requirements Document (PRD)
 
 ## Requirements Description

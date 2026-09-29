@@ -1,3 +1,5 @@
+> Historical specification: this document includes earlier designs or proposals, not necessarily current behavior. See the [documentation index](README.md) for the current guides.
+
 # Implementation Spec
 
 Companion to the PRD (`docs/prds/video-summarizer-v1-prd.md`). Captures *how* each
